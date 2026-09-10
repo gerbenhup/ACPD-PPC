@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+build/
+dist/
+
+# Virtual environments
+.venv/
+venv/
+
+# Generated experiment artifacts
+PPC_examples/*/models/
+PPC_examples/*/*.h5
+PPC_examples/*/*.pdf
+
+# OS
+.DS_Store
