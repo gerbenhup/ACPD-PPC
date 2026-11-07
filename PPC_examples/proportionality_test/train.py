@@ -19,6 +19,9 @@ if __name__ == '__main__':
         memory_growth = True,
     )
 
+    # Make TensorFlow operations deterministic
+    tf.config.experimental.enable_op_determinism()
+
     for iteration in range(100):
 
         # Seed per iteration, so each of the 100 repeats is reproducible but not identical
@@ -59,12 +62,14 @@ if __name__ == '__main__':
                 batch_size      = settings.batch_size,
                 step1_generator = step1_generator,
                 step2_generator = step2_generator,
+                seed            = 2*iteration,
             )
 
             val_dataset = tools.data.TwoStepDataset(
                 batch_size      = settings.batch_size,
                 step1_generator = step1_generator,
                 step2_generator = step2_generator,
+                seed            = 2*iteration+1,
             )
 
             # Create models

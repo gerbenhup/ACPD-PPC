@@ -8,8 +8,10 @@ import numpy as np
 
 if  __name__ == '__main__':
 
+    # Seed all random number generators and make TensorFlow operations deterministic
     np.random.seed(0)
     tf.keras.utils.set_random_seed(0)
+    tf.config.experimental.enable_op_determinism()
 
     PPC.gpu.select_gpus(
         selected_gpus = PPC.gpu.find_available(
@@ -44,13 +46,15 @@ if  __name__ == '__main__':
 
         # Create dataset instances
         dataset = tools.data.PositiveSamplesDataset(
-            PositiveSample_inst = PositiveSample_inst, 
-            batch_size          = settings.batch_size
+            PositiveSample_inst = PositiveSample_inst,
+            batch_size          = settings.batch_size,
+            seed                = 0,
         )
-        
+
         val_dataset = tools.data.PositiveSamplesDataset(
-            PositiveSample_inst = val_PositiveSample_inst, 
-            batch_size          = settings.batch_size
+            PositiveSample_inst = val_PositiveSample_inst,
+            batch_size          = settings.batch_size,
+            seed                = 1,
         )
 
         # Create models

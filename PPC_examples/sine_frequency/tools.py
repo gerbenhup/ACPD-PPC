@@ -43,7 +43,7 @@ class models:
         model = tf.keras.Model(inputs, x)
 
         return model
-    
+
     def decoder_model(L: int, Ne: int, filters: int) -> tf.keras.Model:
         """Create decoder model
 
@@ -89,7 +89,7 @@ class models:
         model   = tf.keras.Model(inputs, outputs)
 
         return model
-    
+
     def forecast_model(Ng: int, Ne: int, dense_units: int) -> tf.keras.Model:
         """Create forecast model
 
@@ -120,7 +120,7 @@ class models:
         model = tf.keras.Model(inputs, outputs)
 
         return model
-    
+
 class data:
 
     def constrained_random_walk(lower_bounds: Union[list, np.ndarray], upper_bounds: Union[list, np.ndarray], change_rate: float, last_state: Optional[float]=None, dtype: np.dtype=np.float32) -> np.ndarray:
@@ -140,7 +140,7 @@ class data:
         x[0] = np.random.uniform(lower_bounds[0], upper_bounds[0]) if last_state is None else last_state
 
         for i, lower_bound, upper_bound in zip(range(1, len(lower_bounds)), lower_bounds[1:], upper_bounds[1:]):
-            
+
             x[i] = np.random.normal(loc=x[i-1], scale=change_rate)
             x[i] = np.minimum(x[i], upper_bound)
             x[i] = np.maximum(x[i], lower_bound)
@@ -178,7 +178,7 @@ class data:
         # Generate list of lower bounds
         lower_bounds = [lower_bound]*size
         upper_bounds = [upper_bound]*size
-        
+
         # Generate filter coefficients for a lowpass filter
         sos = scipy.signal.butter(4, fc, output='sos', fs=fs)
 
@@ -200,7 +200,7 @@ class data:
             np.ndarray: Noise signal.
         """
         return np.random.normal(0, stddev, size).astype(dtype)
-    
+
     def generate_signal(
         Np,
         Nf,
@@ -278,7 +278,7 @@ class data:
         t = np.linspace(0, len(signal)/fs, len(signal), endpoint=False)
 
         return t, signal, signal_reshaped
-            
+
     class positive_sample_helper:
         """Picklable callable that generates a single "positive" sample (no frequency change) for `Pool.imap`
 
@@ -303,11 +303,13 @@ class data:
             amplitude_change_rate: float,
             noise_std_range: Tuple[float, float],
             time_shift_range: Tuple[float, float],
+            seed: int,
         ):
             """Store the signal-generation parameters passed through to `data.generate_signal` on each call
 
             Args:
                 fr (Tuple[float, float]): overall frequency range the center frequency is drawn from
+                seed (int): seed of the dataset; sample i is generated with seed (seed, i)
                 (all other args): see `data.generate_signal`
             """
 
@@ -326,16 +328,20 @@ class data:
             self.amplitude_change_rate       = amplitude_change_rate
             self.noise_std_range             = noise_std_range
             self.time_shift_range            = time_shift_range
+            self.seed                        = seed
 
-        def __call__(self, *args, **kwargs) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-            """Draw a random center frequency and generate one non-conforming, unchanged-frequency sample
+        def __call__(self, index: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+            """Draw a random center frequency and generate one conforming, unchanged-frequency sample
 
             Args:
-                *args, **kwargs: unused, present so this method can be passed to `map()`/`Pool.imap` over a dummy iterable
+                index (int): index of the sample in the dataset, used to seed its generation
 
             Returns:
                 Tuple[np.ndarray, np.ndarray, np.ndarray]: see `data.generate_signal`
             """
+
+            # Seed per sample, so the dataset is reproducible regardless of which worker generates which sample
+            np.random.seed([self.seed, index])
 
             f_center_past   = np.random.uniform(self.fr[0]+0.5*self.fb, self.fr[1]-0.5*self.fb)
             f_center_future = f_center_past
@@ -384,11 +390,13 @@ class data:
             amplitude_change_rate: float,
             noise_std_range: Tuple[float, float],
             time_shift_range: Tuple[float, float],
+            seed: int,
         ):
             """Store the signal-generation parameters passed through to `data.generate_signal` on each call
 
             Args:
                 fr (Tuple[float, float]): overall frequency range (unused directly, kept for interface parity)
+                seed (int): seed of the dataset; sample i is generated with seed (seed, i)
                 (all other args): see `data.generate_signal`
             """
 
@@ -407,18 +415,22 @@ class data:
             self.amplitude_change_rate       = amplitude_change_rate
             self.noise_std_range             = noise_std_range
             self.time_shift_range            = time_shift_range
+            self.seed                        = seed
 
-        def __call__(self, task: Tuple[float, float]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        def __call__(self, task: Tuple[int, Tuple[float, float]]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
             """Generate one sample for the given explicit (past, future) center-frequency pair
 
             Args:
-                task (Tuple[float, float]): (past center frequency, future center frequency)
+                task (Tuple[int, Tuple[float, float]]): (sample index, (past center frequency, future center frequency)). The index seeds the generation of the sample.
 
             Returns:
                 Tuple[np.ndarray, np.ndarray, np.ndarray]: see `data.generate_signal`
             """
 
-            f_center_past, f_center_future = task
+            index, (f_center_past, f_center_future) = task
+
+            # Seed per sample, so the dataset is reproducible regardless of which worker generates which sample
+            np.random.seed([self.seed, index])
 
             return data.generate_signal(
                 self.Np,
@@ -438,7 +450,7 @@ class data:
                 self.noise_std_range,
                 self.time_shift_range,
             )
-    
+
     class PositiveSamples:
         """Collection of "positive" signal segments (no frequency change across the segment boundary)
 
@@ -495,6 +507,7 @@ class data:
             noise_std_range: Tuple[float, float],
             time_shift_range: Tuple[float, float],
             workers: int=1,
+            seed: int=0,
         ) -> 'data.PositiveSamples':
             """Generate `size` positive samples and save them (and the generation parameters) to an HDF5 file
 
@@ -502,6 +515,7 @@ class data:
                 path (Path): HDF5 file to write
                 size (int): number of samples to generate
                 workers (int, optional): number of worker processes to generate samples in parallel. Defaults to 1.
+                seed (int, optional): seed of the dataset; sample i is generated with seed (seed, i). Defaults to 0.
                 (all other args): see `data.generate_signal`
 
             Returns:
@@ -513,7 +527,7 @@ class data:
                 close_func = lambda: None
             elif workers > 1:
                 pool       = Pool(workers)
-                map_func   = pool.imap_unordered
+                map_func   = pool.imap
                 close_func = pool.close
 
             generator = data.positive_sample_helper(
@@ -532,10 +546,11 @@ class data:
                 amplitude_change_rate,
                 noise_std_range,
                 time_shift_range,
+                seed,
             )
 
             collection = []
-            for _, _, signals_reshaped in tqdm(map_func(generator, [None]*size), total=size):
+            for _, _, signals_reshaped in tqdm(map_func(generator, range(size)), total=size):
                 collection.append(signals_reshaped)
             collection = np.stack(collection, axis=0)
 
@@ -560,7 +575,7 @@ class data:
                 hf['collection'].attrs.create('time_shift_range', data=time_shift_range)
 
             return data.PositiveSamples(path)
-        
+
     class PositiveNegativeSamples:
         """Labelled collection of conforming ("positive") and frequency-changed ("negative") signal segments
 
@@ -602,6 +617,7 @@ class data:
             noise_std_range: Tuple[float, float],
             time_shift_range: Tuple[float, float],
             workers: int=1,
+            seed: int=0,
         ) -> 'data.PositiveNegativeSamples':
             """Generate `num_pos` positive and `num_pos` negative samples and save them to an HDF5 file
 
@@ -612,6 +628,7 @@ class data:
                 path (Path): HDF5 file to write
                 num_pos (int): number of positive (and, symmetrically, negative) samples to generate
                 workers (int, optional): number of worker processes to generate samples in parallel. Defaults to 1.
+                seed (int, optional): seed of the dataset. The frequencies are drawn with this seed, and sample i is generated with seed (seed, i), counting the negative samples after the positive ones. Defaults to 0.
                 (all other args): see `data.generate_signal`
 
             Returns:
@@ -620,9 +637,14 @@ class data:
 
             if workers == 1:
                 map_func   = map
+                close_func = lambda: None
             elif workers > 1:
                 pool       = Pool(workers)
-                map_func   = pool.imap_unordered
+                map_func   = pool.imap
+                close_func = pool.close
+
+            # Random number generator for drawing the center frequencies
+            rng = np.random.RandomState(seed)
 
             generator = data.grid_sample_helper(
                 Np,
@@ -640,24 +662,25 @@ class data:
                 amplitude_change_rate,
                 noise_std_range,
                 time_shift_range,
+                seed,
             )
-            
+
             # Generate positive samples
-            fcs         = np.random.uniform(fr[0]+0.5*fb, fr[1]-0.5*fb, num_pos)
+            fcs         = rng.uniform(fr[0]+0.5*fb, fr[1]-0.5*fb, num_pos)
             tasks       = np.stack([fcs, fcs], axis=1)
 
             pos_samples = []
-            for _, _, signals_reshaped in tqdm(map_func(generator, tasks), total=len(tasks)):
+            for _, _, signals_reshaped in tqdm(map_func(generator, enumerate(tasks)), total=len(tasks)):
                 pos_samples.append(signals_reshaped)
             pos_samples = np.stack(pos_samples, axis=0)
 
             # Generate negative samples
-            fcs_past   = np.random.uniform(fr[0]+0.5*fb, fr[1]-0.5*fb, num_pos)
+            fcs_past   = rng.uniform(fr[0]+0.5*fb, fr[1]-0.5*fb, num_pos)
             fcs_future = np.empty_like(fcs_past)
 
             for i in range(len(fcs_past)):
                 while True:
-                    fcs_future_candidate = np.random.uniform(fr[0]+0.5*fb, fr[1]-0.5*fb)
+                    fcs_future_candidate = rng.uniform(fr[0]+0.5*fb, fr[1]-0.5*fb)
                     if fcs_future_candidate != fcs_past[i]:
                         fcs_future[i] = fcs_future_candidate
                         break
@@ -665,9 +688,11 @@ class data:
             tasks = np.stack([fcs_past, fcs_future], axis=1)
 
             neg_samples = []
-            for _, _, signals_reshaped in tqdm(map_func(generator, tasks), total=len(tasks)):
+            for _, _, signals_reshaped in tqdm(map_func(generator, enumerate(tasks, start=num_pos)), total=len(tasks)):
                 neg_samples.append(signals_reshaped)
             neg_samples = np.stack(neg_samples, axis=0)
+
+            close_func()
 
             with h5py.File(path, 'w') as hf:
                 hf.create_dataset('pos_samples', data=pos_samples)
@@ -738,6 +763,7 @@ class data:
             noise_std_range: Tuple[float, float],
             time_shift_range: Tuple[float, float],
             workers: int=1,
+            seed: int=0,
         ) -> 'data.GridSamples':
             """Generate samples over a `gridsize` x `gridsize` grid of past/future center frequencies and save them
 
@@ -749,6 +775,7 @@ class data:
                 gridsize (int): number of distinct center frequencies per axis
                 iterations (int): number of independent samples generated per grid point
                 workers (int, optional): number of worker processes to generate samples in parallel. Defaults to 1.
+                seed (int, optional): seed of the dataset; sample i is generated with seed (seed, i). Defaults to 0.
                 (all other args): see `data.generate_signal`
 
             Returns:
@@ -760,7 +787,7 @@ class data:
                 close_func = lambda: None
             elif workers > 1:
                 pool       = Pool(workers)
-                map_func   = pool.imap_unordered
+                map_func   = pool.imap
                 close_func = pool.close
 
             generator = data.grid_sample_helper(
@@ -779,6 +806,7 @@ class data:
                 amplitude_change_rate,
                 noise_std_range,
                 time_shift_range,
+                seed,
             )
 
             grid        = np.linspace(fr[0]+0.5*fb, fr[1]-0.5*fb, gridsize, endpoint=True)
@@ -789,12 +817,12 @@ class data:
             tasks       = np.stack([grid_past, grid_future], axis=1)
 
             collection = []
-            for _, _, signals_reshaped in tqdm(map_func(generator, tasks), total=len(tasks)):
+            for _, _, signals_reshaped in tqdm(map_func(generator, enumerate(tasks)), total=len(tasks)):
                 collection.append(signals_reshaped)
             collection = np.stack(collection, axis=0)
 
             close_func()
-            
+
             with h5py.File(path, 'w') as hf:
                 hf.create_dataset('collection', data=collection)
                 hf['collection'].attrs.create('gridsize', data=gridsize)
@@ -816,7 +844,7 @@ class data:
                 hf['collection'].attrs.create('time_shift_range', data=time_shift_range)
 
             return data.GridSamples(path)
-        
+
     class PositiveSamplesDataset:
         """tf.data-backed, batched, shuffled generator over a `PositiveSamples` collection"""
 
@@ -825,13 +853,14 @@ class data:
             Args:
                 PositiveSample_inst (data.PositiveSamples): loaded positive-samples collection to iterate over
                 batch_size (int): batch size
-                seed (int, optional): seed for shuffling sample order. Defaults to 0.
+                seed (int, optional): seed of this dataset's own random number generator, used for shuffling sample order. Defaults to 0.
             """
 
             self.PositiveSample_inst = PositiveSample_inst
             self.batch_size          = batch_size
 
-            np.random.seed(seed)
+            # Own random number generator, so the sample order does not depend on other users of np.random
+            self.rng = np.random.RandomState(seed)
 
             self.inds = np.arange(len(self.PositiveSample_inst.data))
 
@@ -843,10 +872,10 @@ class data:
             """
 
             while True:
-                np.random.shuffle(self.inds)
+                self.rng.shuffle(self.inds)
 
                 for i in range(int(len(self.inds)/self.batch_size)):
-                    
+
                     past_data   = self.PositiveSample_inst.past_data[i*self.batch_size:(i+1)*self.batch_size, ...]
                     future_data = self.PositiveSample_inst.future_data[i*self.batch_size:(i+1)*self.batch_size, ...]
 
@@ -885,7 +914,7 @@ class data:
             )
 
             return dataset
-        
+
 class callbacks:
 
     class SineMonitor:
@@ -953,7 +982,7 @@ class callbacks:
                 plt.close()
 
             return True
-        
+
 class colormaps:
 
     def get_modified_oranges():
@@ -964,7 +993,7 @@ class colormaps:
         """
 
         cmap = mpl.colormaps['Oranges']
-        
+
         cmap._segmentdata['red'][0, 1:]   = 1
         cmap._segmentdata['green'][0, 1:] = 1
         cmap._segmentdata['blue'][0, 1:]  = 1

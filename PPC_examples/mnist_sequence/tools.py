@@ -180,8 +180,8 @@ class data:
                 seed (int, optional): seed for the train/validation split. Defaults to 0.
             """
 
-            # Set seed
-            np.random.seed(seed)
+            # Random number generator for the train/validation split
+            rng = np.random.RandomState(seed)
 
             # Load data
             (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
@@ -194,7 +194,7 @@ class data:
 
             for digit, count in zip(range(10), val_counts):
                 inds = np.argwhere(y_train == digit).ravel()
-                val_inds.append(np.random.choice(inds, size=count, replace=False))
+                val_inds.append(rng.choice(inds, size=count, replace=False))
 
             val_inds = np.concatenate(val_inds)
 
@@ -238,6 +238,7 @@ class data:
             Np: int,
             Nf: int,
             augmentation: Optional[tf.keras.Model]=None,
+            seed: int=0,
         ):
             """Build a tf.data-backed generator of successive-digit sequences from an MNIST split
 
@@ -247,6 +248,7 @@ class data:
                 Np (int): number of past samples per sequence
                 Nf (int): number of future samples per sequence
                 augmentation (Optional[tf.keras.Model], optional): (past, future) augmentation models, as returned by augmentation.MNISTaugmentation. Defaults to None.
+                seed (int, optional): seed of this dataset's own random number generator, used to draw the sequences. Defaults to 0.
             """
 
             # Input arguments
@@ -255,6 +257,9 @@ class data:
             self.Np           = Np
             self.Nf           = Nf
             self.augmentation = augmentation
+
+            # Own random number generator, so the drawn sequences do not depend on other users of np.random
+            self.rng = np.random.RandomState(seed)
 
             self.image_shape = self.MNIST_inst.shape
             self.dataset     = self.MNIST_inst.dataset_per_label
@@ -269,14 +274,14 @@ class data:
                 Tuple[np.ndarray, np.ndarray]: past samples of shape (Np, ...) and future samples of shape (Nf, ...)
             """
 
-            start         = np.random.randint(0, 10)
+            start         = self.rng.randint(0, 10)
             labels_past   = np.mod(np.arange(start, start + self.Np), 10)
             labels_future = np.mod(np.arange(start + self.Np, start + self.Np + self.Nf), 10)
 
             samples_past = []
 
             for label_past in labels_past:
-                samples_past.append(self.dataset[label_past][np.random.choice(self.dataset[label_past].shape[0])])
+                samples_past.append(self.dataset[label_past][self.rng.choice(self.dataset[label_past].shape[0])])
 
             samples_past = np.stack(samples_past, axis=0)
             samples_past = np.expand_dims(samples_past, axis=-1)
@@ -284,7 +289,7 @@ class data:
             samples_future = []
 
             for label_future in labels_future:
-                samples_future.append(self.dataset[label_future][np.random.choice(self.dataset[label_future].shape[0])])
+                samples_future.append(self.dataset[label_future][self.rng.choice(self.dataset[label_future].shape[0])])
 
             samples_future = np.stack(samples_future, axis=0)
             samples_future = np.expand_dims(samples_future, axis=-1)
@@ -344,7 +349,7 @@ class data:
                 dataset = dataset.map(
                     map_func           = lambda x, y: [self.augmentation[0](x), self.augmentation[1](y)],
                     num_parallel_calls = tf.data.AUTOTUNE,
-                    deterministic      = False,
+                    deterministic      = True,
                 )
 
             dataset = dataset.prefetch(

@@ -26,6 +26,7 @@ if __name__ == '__main__':
             noise_std_range             = [0, 0.2],
             time_shift_range            = [0, 0.75],
             workers                     = 16,
+            seed                        = 0,
         )
 
     if not (Path(__file__).parent / 'val_dataset.h5').exists():
@@ -49,6 +50,7 @@ if __name__ == '__main__':
             noise_std_range             = [0, 0.2],
             time_shift_range            = [0, 0.75],
             workers                     = 16,
+            seed                        = 1,
         )
 
     if not (Path(__file__).parent / 'test_dataset.h5').exists():
@@ -73,6 +75,7 @@ if __name__ == '__main__':
             noise_std_range             = [0, 0.2],
             time_shift_range            = [0, 0.75],
             workers                     = 16,
+            seed                        = 2,
         )
 
     if not (Path(__file__).parent / 'metric_val_dataset.h5').exists():
@@ -96,6 +99,7 @@ if __name__ == '__main__':
             noise_std_range             = [0, 0.2],
             time_shift_range            = [0, 0.75],
             workers                     = 16,
+            seed                        = 3,
         )
 
     if not (Path(__file__).parent / 'metric_test_dataset.h5').exists():
@@ -119,4 +123,5 @@ if __name__ == '__main__':
             noise_std_range             = [0, 0.2],
             time_shift_range            = [0, 0.75],
             workers                     = 30,
+            seed                        = 4,
         )

@@ -97,17 +97,21 @@ class data:
     class TwoStepDataset:
         """tf.data-backed generator of (x1, x2) sample pairs from a two-step generative process"""
 
-        def __init__(self, batch_size: int, step1_generator: callable, step2_generator: callable):
+        def __init__(self, batch_size: int, step1_generator: callable, step2_generator: callable, seed: int=0):
             """
             Args:
                 batch_size (int): batch size
-                step1_generator (callable): callable(batch_size) -> x1 samples
-                step2_generator (callable): callable(x1 samples) -> x2 samples
+                step1_generator (callable): callable(batch_size, rng) -> x1 samples
+                step2_generator (callable): callable(x1 samples, rng) -> x2 samples
+                seed (int, optional): seed of this dataset's own random number generator, which is passed to the step generators. Defaults to 0.
             """
 
             self.batch_size      = batch_size
             self.step1_generator = step1_generator
             self.step2_generator = step2_generator
+
+            # Own random number generator, so the drawn samples do not depend on other users of np.random
+            self.rng = np.random.RandomState(seed)
 
         def prepare_batch(self) -> Tuple[np.ndarray, np.ndarray]:
             """Draw one batch of (x1, x2) sample pairs
@@ -116,8 +120,8 @@ class data:
                 Tuple[np.ndarray, np.ndarray]: batch of x1 samples and batch of x2 samples
             """
 
-            samples_past   = self.step1_generator(self.batch_size) # [B,]
-            samples_future = self.step2_generator(samples_past) # [B,]
+            samples_past   = self.step1_generator(self.batch_size, self.rng) # [B,]
+            samples_future = self.step2_generator(samples_past, self.rng) # [B,]
 
             samples_past   = np.reshape(samples_past, (self.batch_size, 1, 1))
             samples_future = np.reshape(samples_future, (self.batch_size, 1, 1))
@@ -179,17 +183,18 @@ class data:
             self.values = values
             self.probs  = probs
 
-        def __call__(self, batch_size: int) -> np.ndarray:
+        def __call__(self, batch_size: int, rng: np.random.RandomState) -> np.ndarray:
             """Draw a batch of x1 samples
 
             Args:
                 batch_size (int): number of samples to draw
+                rng (np.random.RandomState): random number generator to draw with
 
             Returns:
                 np.ndarray: x1 samples
             """
 
-            return np.random.choice(self.values, size=batch_size, p=self.probs)
+            return rng.choice(self.values, size=batch_size, p=self.probs)
 
     class NormalStepTwo:
         """Step-2 generator that draws x2 ~ Normal(x1, std_func(x1)) given x1 samples"""
@@ -202,17 +207,18 @@ class data:
 
             self.std_func = std_func
 
-        def __call__(self, samples_future: np.ndarray) -> np.ndarray:
+        def __call__(self, samples_future: np.ndarray, rng: np.random.RandomState) -> np.ndarray:
             """Draw x2 samples conditioned on x1 samples
 
             Args:
                 samples_future (np.ndarray): x1 samples to condition on
+                rng (np.random.RandomState): random number generator to draw with
 
             Returns:
                 np.ndarray: x2 samples
             """
 
-            return np.random.normal(samples_future, self.std_func(samples_future)).astype(np.float32)
+            return rng.normal(samples_future, self.std_func(samples_future)).astype(np.float32)
 
 class functions:
 

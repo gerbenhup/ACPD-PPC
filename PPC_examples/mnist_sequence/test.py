@@ -162,6 +162,7 @@ if  __name__ == '__main__':
         res = scipy.optimize.differential_evolution(
             func   = func,
             bounds = [(0., 1.)],
+            seed   = 0,
         )
 
         best_threshold = res.x
