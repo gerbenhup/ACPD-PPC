@@ -2,16 +2,43 @@ from pathlib import Path
 import sys
 sys.path.append(str((Path(__file__).parent.resolve() / '../../').resolve()))
 import PPC
+import tools
 import tensorflow as tf
 import numpy as np
 import matplotlib.pyplot as plt
-from tqdm import tqdm
 import itertools
+import sklearn.metrics
 import scipy.stats
+import scipy.optimize
+from tqdm import tqdm
+
+def compute_matrices(MNIST_inst, encoder_model, ar_model, forecast_models, batch_size):
+    """Compute per-image encodings/forecasts and the resulting pairwise log-likelihood,
+    tail-probability and successive-digit truth matrices for a MNIST split."""
+
+    encodings             = encoder_model.predict(MNIST_inst.dataset_with_labels[0], batch_size=batch_size, verbose=1)
+    contexts              = ar_model.predict(tf.expand_dims(encodings, axis=1), batch_size=batch_size, verbose=1)[:, 0, :]
+    encodings_future_pred = forecast_models[0].predict(contexts, batch_size=batch_size, verbose=1)
+
+    n = len(MNIST_inst.dataset_with_labels[0])
+    loglikelihoods = np.empty((n, n), dtype=np.float32)
+    probabilities  = np.empty((n, n), dtype=np.float32)
+
+    for i in tqdm(range(n)):
+        loglikelihoods[i, :] = PPC.probability.GaussianLogLikelihood(encodings, encodings_future_pred[i:i+1])
+        probabilities[i, :]  = PPC.probability.MultiVariateGaussianTailProbability(encodings, encodings_future_pred[i:i+1])
+
+    truth = np.zeros((n, n), dtype=bool)
+    for label_a, label_b in itertools.product(range(10), repeat=2):
+        if np.mod(label_a + 1, 10) == label_b:
+            inds_a = np.argwhere(MNIST_inst.dataset_with_labels[1] == label_a).ravel()
+            inds_b = np.argwhere(MNIST_inst.dataset_with_labels[1] == label_b).ravel()
+            truth[np.ix_(inds_a, inds_b)] = True
+
+    return encodings, encodings_future_pred, loglikelihoods, probabilities, truth
 
 if  __name__ == '__main__':
 
-    # Select GPU's
     PPC.gpu.select_gpus(
         selected_gpus = PPC.gpu.find_available(
             num_gpus        = 1,
@@ -21,148 +48,222 @@ if  __name__ == '__main__':
         memory_growth = True,
     )
 
-    # Select save directory
-    save_dir = Path(__file__).parent.resolve() / 'models/model-001/'
+    models_dir = Path(__file__).parent.resolve() / 'models/'
 
-    # Load settings
-    settings = PPC.tools.Settings.load(save_dir / 'settings.json')
+    val_MNIST_inst  = tools.data.MNIST('val')
+    test_MNIST_inst = tools.data.MNIST('test')
 
-    # Load models
-    encoder_model, ar_model, forecast_models = PPC.tools.load_pcpc_models(
-        dir = save_dir,
-    )
+    for save_dir in models_dir.iterdir():
 
-    # Load MNIST data and preprocess
-    _, (x, y) = tf.keras.datasets.mnist.load_data()
-    x         = np.expand_dims((x / 255).astype(np.float32), axis=-1)
+        print(save_dir.stem)
 
-    # Sort data on digit values
-    sort_inds = np.argsort(y)
-    x         = x[sort_inds]
-    y         = y[sort_inds]
+        encoder_model, ar_model, forecast_models = PPC.tools.load_pcpc_models(save_dir)
+        settings = PPC.tools.Settings.load(save_dir / 'settings.json')
 
-    # Generate empty score tables
-    loglikelihoods = np.empty((len(x), len(x)), dtype=np.float32)
-    probabilities  = np.empty((len(x), len(x)), dtype=np.float32)
+        # Pairwise scores on validation (threshold search) and test (figures + final metrics)
+        _, _, _, val_probabilities, val_truth = compute_matrices(
+            val_MNIST_inst, encoder_model, ar_model, forecast_models, settings.batch_size,
+        )
+        test_encodings, test_encodings_future_pred, test_loglikelihoods, test_probabilities, test_truth = compute_matrices(
+            test_MNIST_inst, encoder_model, ar_model, forecast_models, settings.batch_size,
+        )
 
-    # Generate encodings for all images
-    encodings             = encoder_model.predict(x, batch_size=settings.batch_size)
-    contexts              = ar_model.predict(tf.expand_dims(encodings, axis=1), batch_size=settings.batch_size)[:, 0, :]
-    encodings_future_pred = forecast_models[0].predict(contexts, batch_size=settings.batch_size)
+        # Figure 6: average log-likelihood / probability of conformance per digit pair (test set)
+        loglikelihoods_by_labels = np.empty((10, 10), dtype=np.float32)
+        probabilities_by_labels  = np.empty((10, 10), dtype=np.float32)
 
-    # Plot t-SNE reduced encodings
-    reduced_encodings = PPC.dimension.TSNE(2, 30).fit_transform(encodings)
+        for label_a, label_b in itertools.product(range(10), repeat=2):
+            inds_a = np.argwhere(test_MNIST_inst.dataset_with_labels[1] == label_a).ravel()
+            inds_b = np.argwhere(test_MNIST_inst.dataset_with_labels[1] == label_b).ravel()
 
-    plt.figure()
-    for unique_label in np.unique(y):
-        inds = np.argwhere(y == unique_label).ravel()
-        plt.scatter(reduced_encodings[inds, 0], reduced_encodings[inds, 1], marker='.', label='Digit {}'.format(unique_label), alpha=0.5)
-    plt.legend(labelspacing=0.2, handletextpad=0.2)
-    plt.xticks([])
-    plt.yticks([])
-    plt.title('t-SNE reduced latent space\nrepresentation of MNIST samples')
-    plt.savefig(save_dir / 'pcpc-mnist-tsne.pdf', transparent=True)
-    plt.close()
+            loglikelihoods_by_labels[label_a, label_b] = np.mean(test_loglikelihoods[np.ix_(inds_a, inds_b)])
+            probabilities_by_labels[label_a, label_b]  = np.mean(test_probabilities[np.ix_(inds_a, inds_b)])
 
-    # Generate stats for all combinations and plot them
-    for i in tqdm(range(len(x))):
-        loglikelihoods[i, :] = PPC.probability.GaussianLogLikelihood(encodings, encodings_future_pred[i:i+1])
-        probabilities[i, :]  = PPC.probability.MultiVariateGaussianTailProbability(encodings, encodings_future_pred[i:i+1])
+        plt.figure(figsize=[6.85, 3])
+        plt.subplot(1, 2, 1)
+        plt.title('Log-likelihood')
+        plt.imshow(loglikelihoods_by_labels.T, cmap=tools.colormaps.get_modified_oranges())
+        plt.xticks(np.arange(10))
+        plt.yticks(np.arange(10))
+        plt.xlabel('First digit')
+        plt.ylabel('Second digit')
+        plt.colorbar(fraction=0.046, pad=0.04)
+        plt.subplot(1, 2, 2)
+        plt.title('Probability of conformance')
+        plt.imshow(probabilities_by_labels.T*100, cmap=tools.colormaps.get_modified_oranges(), vmin=0, vmax=100)
+        plt.xticks(np.arange(10))
+        plt.yticks(np.arange(10))
+        plt.xlabel('First digit')
+        plt.ylabel('Second digit')
+        plt.colorbar(fraction=0.046, pad=0.04)
+        plt.tight_layout()
+        plt.savefig(save_dir / 'mnist-matrix.pdf', transparent=True)
+        plt.close()
 
-    plt.figure()
-    plt.imshow(loglikelihoods, cmap='Oranges')
-    plt.xticks([])
-    plt.yticks([])
-    plt.title('Log-likelihood per sample combination')
-    plt.colorbar()
-    plt.savefig(save_dir / 'pcpc-mnist-loglikelihood-samples.png', dpi=300)
-    plt.close()
+        # Flip to anomaly-detection framing: positive class = non-successive (anomalous) pair
+        val_y_true  = ~val_truth.flatten()
+        test_y_true = ~test_truth.flatten()
 
-    plt.figure()
-    plt.imshow(probabilities, cmap='Oranges')
-    plt.xticks([])
-    plt.yticks([])
-    plt.title('Probability of conformity per sample combination')
-    plt.colorbar()
-    plt.savefig(save_dir / 'pcpc-mnist-probability-samples.png', dpi=300)
-    plt.close()
+        val_y_pred  = 1 - val_probabilities.flatten()
+        test_y_pred = 1 - test_probabilities.flatten()
 
-    # Summarize statistics and plot them
-    loglikelihoods_by_label = np.empty((10, 10), dtype=np.float32)
-    probabilities_by_label  = np.empty((10, 10), dtype=np.float32)
+        # Figure 7: ROC + PRC curves on the test set
+        roc_fpr, roc_tpr, _          = sklearn.metrics.roc_curve(y_true=test_y_true, y_score=test_y_pred)
+        prc_precision, prc_recall, _ = sklearn.metrics.precision_recall_curve(y_true=test_y_true, probas_pred=test_y_pred)
 
-    for label_a, label_b in tqdm(list(itertools.product(range(10), repeat=2))):
+        plt.figure(figsize=[6.85, 3])
 
-        inds_a = np.argwhere(y == label_a).ravel()
-        inds_b = np.argwhere(y == label_b).ravel()
+        ax = plt.subplot(1, 2, 1)
+        plt.title('Receiver Operating Characteristic Curve')
+        plt.plot(roc_fpr*100, roc_tpr*100, label='PCPC-MNIST')
+        plt.plot([0, 100], [0, 100], linestyle='--', color='grey', label='Random classifier')
+        plt.xlabel('False positive rate [%]')
+        plt.ylabel('True positive rate [%]')
+        plt.xlim([-3, 103])
+        plt.ylim([-3, 103])
+        plt.grid(visible=True, which='both')
+        plt.legend()
 
-        loglikelihoods_by_label[label_a, label_b] = np.mean(loglikelihoods[np.ix_(inds_a, inds_b)])
-        probabilities_by_label[label_a, label_b]  = np.mean(probabilities[np.ix_(inds_a, inds_b)])
-
-    plt.figure()
-    plt.imshow(loglikelihoods_by_label, cmap='Oranges')
-    plt.title('Log-likelihood per digit combination')
-    plt.xticks(np.arange(10))
-    plt.yticks(np.arange(10))
-    plt.colorbar()
-    plt.savefig(save_dir / 'pcpc-mnist-loglikelihood-digits.pdf', transparent=True)
-    plt.close()
-
-    plt.figure()
-    plt.imshow(probabilities_by_label, cmap='Oranges')
-    plt.title('Probability of conformity per digit combination')
-    plt.xticks(np.arange(10))
-    plt.yticks(np.arange(10))
-    plt.colorbar()
-    plt.savefig(save_dir / 'pcpc-mnist-probability-digits.pdf', transparent=True)
-    plt.close()
-
-    # Create PCA reduced encodings, make a prediction of the next digit for each digit
-    # and plot reduced prediction distributions over the latent space
-    pca                   = PPC.dimension.PCA(2)
-    reduced_encodings_pca = pca.fit_transform(encodings)
-
-    for digit in range(10):
-
-        example_ind = np.argwhere(y == digit)[0, 0]
-
-        reduced_encodings_future_pred_mu, reduced_encodings_future_pred_cov = pca.transform_gaussians(encodings_future_pred[example_ind:example_ind+1])
-        reduced_encodings_future_pred_mu  = reduced_encodings_future_pred_mu[0]
-        reduced_encodings_future_pred_cov = reduced_encodings_future_pred_cov[0]
-
-        d0, d1 = np.mgrid[reduced_encodings_pca[:, 0].min():reduced_encodings_pca[:, 0].max():0.01, reduced_encodings_pca[:, 1].min():reduced_encodings_pca[:, 1].max():0.01]
-        pos    = np.dstack((d0, d1))
-        rv     = scipy.stats.multivariate_normal(reduced_encodings_future_pred_mu, reduced_encodings_future_pred_cov)
-        d2     = rv.pdf(pos)
-
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 5), sharex=True, sharey=True)
-
-        fig.suptitle('PCA reduced latent space representation of\nMNIST samples with prediction for digit {}'.format(y[example_ind]))
-
-        for unique_label in np.unique(y):
-            inds = np.argwhere(y == unique_label).ravel()
-            ax1.scatter(reduced_encodings_pca[inds, 0], reduced_encodings_pca[inds, 1], marker='.', label='Digit {}'.format(unique_label), alpha=0.5)
-
-        ax1.contour(d0, d1, d2)
-        ax1.legend(labelspacing=0.2, handletextpad=0.2)
-        ax1.set_xticks([])
-        ax1.set_yticks([])
-
-        for unique_label in np.unique(y):
-            if unique_label == np.mod(y[example_ind]+1, 10):
-                inds = np.argwhere(y == np.mod(y[example_ind]+1, 10)).ravel()
-                ax2.scatter(reduced_encodings_pca[inds, 0], reduced_encodings_pca[inds, 1], marker='.', label='Digit {}'.format(unique_label), alpha=0.5)
-            else:
-                # Plot nothing, but advance the color cycle so the digit keeps its color from ax1
-                ax2.scatter([np.nan], [np.nan])
-
-        ax2.contour(d0, d1, d2)
-        ax2.set_xticks([])
-        ax2.set_yticks([])
-
-        ax1.set_aspect('equal')
-        ax2.set_aspect('equal')
+        plt.subplot(1, 2, 2, sharey=ax)
+        plt.title('Precision-Recall Curve')
+        plt.plot(prc_recall*100, prc_precision*100, label='PCPC-MNIST')
+        plt.plot([0, 100], [100*np.mean(test_y_true)]*2, linestyle='--', color='grey', label='Random classifier')
+        plt.xlabel('Recall [%]')
+        plt.ylabel('Precision [%]')
+        plt.xlim([-3, 103])
+        plt.ylim([-3, 103])
+        plt.grid(visible=True, which='both')
+        plt.legend()
 
         plt.tight_layout()
-        plt.savefig(save_dir / 'pcpc-mnist-pca-digit-{}.pdf'.format(digit), transparent=True)
+        plt.savefig(save_dir / 'mnist-curves.pdf', transparent=True)
+        plt.close()
+
+        roc_auc = sklearn.metrics.roc_auc_score(y_true=test_y_true, y_score=test_y_pred)
+        prc_auc = sklearn.metrics.average_precision_score(y_true=test_y_true, y_score=test_y_pred)
+
+        print(settings)
+        print(f'ROC AUC: {roc_auc}')
+        print(f'PRC AUC: {prc_auc}')
+
+        # Find the decision threshold that maximizes F1 on the validation set
+        def func(threshold):
+
+            y_pred_binary = val_y_pred >= float(threshold)
+
+            TP = np.sum(np.logical_and(val_y_true, y_pred_binary))
+            FP = np.sum(np.logical_and(~val_y_true, y_pred_binary))
+            FN = np.sum(np.logical_and(val_y_true, ~y_pred_binary))
+
+            f1_score = (2*TP)/(2*TP+FP+FN)
+
+            return -f1_score
+
+        res = scipy.optimize.differential_evolution(
+            func   = func,
+            bounds = [(0., 1.)],
+            seed   = 0,
+        )
+
+        best_threshold = res.x
+
+        print(f'best_threshold: {best_threshold}')
+
+        # Apply the validation-selected threshold to the test set
+        y_pred_binary = test_y_pred >= best_threshold
+
+        TP = np.sum(np.logical_and(test_y_true, y_pred_binary))
+        FP = np.sum(np.logical_and(~test_y_true, y_pred_binary))
+        TN = np.sum(np.logical_and(~test_y_true, ~y_pred_binary))
+        FN = np.sum(np.logical_and(test_y_true, ~y_pred_binary))
+
+        tpr_recall_sensitivity = TP/(TP+FN)
+        ppv_precision          = TP/(TP+FP)
+        tnr_specificity        = TN/(TN+FP)
+        balanced_accuracy      = (tpr_recall_sensitivity + tnr_specificity) / 2
+        mcc                    = sklearn.metrics.matthews_corrcoef(test_y_true, y_pred_binary)
+        f1_score               = (2*TP)/(2*TP+FP+FN)
+
+        print(f'TP: {TP}')
+        print(f'FP: {FP}')
+        print(f'TN: {TN}')
+        print(f'FN: {FN}')
+        print(f'TPR/recall/sensitivity: {tpr_recall_sensitivity}')
+        print(f'PPV/precision: {ppv_precision}')
+        print(f'TNR/specificity: {tnr_specificity}')
+        print(f'Balanced accuracy: {balanced_accuracy}')
+        print(f'MCC: {mcc}')
+        print(f'F1: {f1_score}')
+
+        # Figure 8: PCA-reduced latent space hexbin plots with predicted-distribution contours
+        pca = PPC.dimension.PCA(2)
+        pca.fit(test_encodings)
+
+        reduced_encodings = pca.transform(test_encodings)
+        reduced_encodings_future_pred_means, reduced_encodings_future_pred_covs = pca.transform_gaussians(test_encodings_future_pred)
+
+        example_digits = [2, 3, 9]
+        example_inds   = []
+        for example_digit in example_digits:
+            example_inds.append(np.argwhere(test_MNIST_inst.dataset_with_labels[1] == example_digit).ravel())
+        example_inds = np.concatenate(example_inds)
+
+        xlims = np.array([reduced_encodings[example_inds, 0].min(), reduced_encodings[example_inds, 0].max()]) + np.array([-0.1, 0.1]) * (reduced_encodings[example_inds, 0].max() - reduced_encodings[example_inds, 0].min())
+        ylims = np.array([reduced_encodings[example_inds, 1].min(), reduced_encodings[example_inds, 1].max()]) + np.array([-0.1, 0.1]) * (reduced_encodings[example_inds, 0].max() - reduced_encodings[example_inds, 1].min())
+
+        global_vmin = np.inf
+        global_vmax = -np.inf
+        hbs         = []
+
+        plt.figure(figsize=[6.85, 3])
+
+        for i, example_digit in enumerate(example_digits):
+
+            if i == 0:
+                ax = plt.subplot(1, len(example_digits), 1)
+            else:
+                ax = plt.subplot(1, len(example_digits), i+1, sharex=ax, sharey=ax)
+
+            inds_current = np.argwhere(test_MNIST_inst.dataset_with_labels[1] == example_digit).ravel()
+            hbs.append(plt.hexbin(
+                x        = reduced_encodings[inds_current, 0],
+                y        = reduced_encodings[inds_current, 1],
+                gridsize = 30,
+                extent   = np.concatenate([xlims, ylims]),
+                cmap     = tools.colormaps.get_modified_oranges(),
+            ))
+
+            vmin = hbs[i].get_array().min()
+            vmax = hbs[i].get_array().max()
+
+            if vmin < global_vmin:
+                global_vmin = vmin
+            if vmax > global_vmax:
+                global_vmax = vmax
+
+            inds_prev = np.argwhere(test_MNIST_inst.dataset_with_labels[1] == np.mod(example_digit - 1, 10)).ravel()
+
+            means = np.mean(reduced_encodings_future_pred_means[inds_prev], axis=0)
+            covs  = np.mean(reduced_encodings_future_pred_covs[inds_prev], axis=0)
+
+            xgrid = np.linspace(xlims[0], xlims[1], 1000)
+            ygrid = np.linspace(ylims[0], ylims[1], 1000)
+
+            d0, d1 = np.meshgrid(xgrid, ygrid)
+            pos    = np.dstack((d0, d1))
+            rv     = scipy.stats.multivariate_normal(means, covs)
+            d2     = rv.pdf(pos)
+
+            plt.contour(d0, d1, d2, alpha=0.5)
+            ax.set_xticklabels([])
+            ax.set_yticklabels([])
+            plt.axis('square')
+            plt.title('Digit {}'.format(example_digit))
+            plt.grid()
+
+        for hb in hbs:
+            hb.set_clim(vmin=global_vmin, vmax=global_vmax)
+
+        plt.tight_layout()
+        plt.savefig(save_dir / 'mnist-latent-hexbin.pdf', transparent=True)
         plt.close()

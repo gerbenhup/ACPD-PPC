@@ -8,14 +8,14 @@ loops, losses, probability/anomaly-scoring utilities), split into one module per
 | --- | --- |
 | `PPC.trainers` | `PPC` and `PCPC` trainer classes: train/train_step/test_step |
 | `PPC.anomaly` (`PPC.Anomaly`) | Online anomaly-scoring class |
-| `PPC.losses` | `MeanSquaredError`, `MaximumLogLikelihoodLoss` (Gaussian or Laplace prior), `ContrastiveNLLRLoss` (PCPC) |
+| `PPC.losses` | `MeanAbsoluteError`, `MeanSquaredError`, `MaximumLogLikelihoodLoss` (Gaussian or Laplace prior), `ContrastiveNLLRLoss` (PCPC) |
 | `PPC.probability` | Gaussian (log-)likelihoods, Laplace log-likelihoods, Mahalanobis distance, tail probabilities |
 | `PPC.dimension` | `PCA` wrapper (with Gaussian projection), `TSNE` wrapper |
 | `PPC.wrappers` | `TimeDistributed`, `TimeStacked` Keras model wrappers |
 | `PPC.weights` | Loss time-weighting schemes |
 | `PPC.math` | Numerically-safe `log`/`exp`/`square`/`sqrt`/`abs` |
 | `PPC.callbacks` | `TerminateOnNaN`, `RestoreOnEarlyStopping`, `EarlyStopping`, `ReduceLROnPlateau` |
-| `PPC.tools` | `Settings`, PPC/PCPC model save/load helpers |
+| `PPC.tools` | `Settings`, `Arguments`, `num_trainable_weights`, PPC/PCPC model save/load helpers |
 | `PPC.gpu` | GPU discovery/selection via `nvidia-smi` |
 
 `PPC_examples/` contains the three experiments from the paper. `PCPC_examples/` contains the
@@ -106,20 +106,24 @@ of a reconstruction loss, the forecast distribution is trained contrastively
 to the mean likelihood of `Nchi` negative samples. Models are trained by `PPC.trainers.PCPC` and
 saved to `models/model-001/`. As above, run the scripts from within each example's directory.
 
+The PCPC examples follow the same structure as their PPC counterparts, and their `test.py` scripts
+are copies of the PPC ones (same figures, same metrics), so the results can be compared directly.
+
 ### `PCPC_examples/sine_frequency`
 
 The training data (`data.h5`, ~35 GB, 1,000,000 samples with 9 negative samples each) must be
-generated once before training. The generator settings are shared between dataset generation and
-testing via `tools.GENERATOR_SETTINGS`.
+generated once before training; `train.py` splits it 80/10/10 into train, validation and test.
+`test.py` evaluates on the test sets of the PPC sine experiment, so generate those first with
+`PPC_examples/sine_frequency/generate_datasets.py`.
 
 ```
-python create_dataset.py
+python generate_datasets.py
 python train.py
 python test.py
 ```
 
-`test.py` sweeps all combinations of center frequencies before and after the change point, and
-saves the mean probability of conformance as `pcpc-sine-matrix.pdf` in the model directory.
+`test.py` produces `sine-examples.pdf`, `sine-matrix.pdf` and `sine-curves.pdf` in the model
+directory, and prints the same detection metrics as the PPC sine experiment.
 
 ### `PCPC_examples/mnist_sequence`
 
@@ -131,8 +135,23 @@ python train.py
 python test.py
 ```
 
-`test.py` saves the t-SNE and PCA projections of the latent space and the log-likelihood and
-probability of conformance matrices (per sample pair and per digit pair) in the model directory.
+`test.py` produces `mnist-matrix.pdf`, `mnist-curves.pdf` and `mnist-latent-hexbin.pdf` in the
+model directory, and prints the same detection metrics as the PPC MNIST experiment.
+
+## Reproducibility
+
+All randomness is seeded:
+
+- Generated datasets: sample `i` of a dataset with seed `s` is generated with seed `(s, i)`, so the
+  `.h5` files are identical on every run, regardless of the number of worker processes.
+- Training: every dataset object owns its random number generator (`seed` argument), the global
+  seeds are set with `tf.keras.utils.set_random_seed`, and
+  `tf.config.experimental.enable_op_determinism()` makes TensorFlow operations deterministic, so
+  rerunning `train.py` on the same hardware and software gives the same model. The exception is
+  `PPC_examples/mnist_sequence`: its `UpSampling2D` and `BatchNormalization` layers have no
+  deterministic GPU implementation, so there the determinism switch is off and reruns on a GPU can
+  differ slightly.
+- Testing: the F1-optimal threshold search (`scipy.optimize.differential_evolution`) uses `seed=0`.
 
 ## Citation
 

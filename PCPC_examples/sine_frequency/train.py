@@ -8,10 +8,11 @@ import numpy as np
 
 if  __name__ == '__main__':
 
+    # Seed all random number generators and make TensorFlow operations deterministic
     np.random.seed(0)
     tf.keras.utils.set_random_seed(0)
+    tf.config.experimental.enable_op_determinism()
 
-    # Select GPU's
     PPC.gpu.select_gpus(
         selected_gpus = PPC.gpu.find_available(
             num_gpus        = 1,
@@ -21,45 +22,50 @@ if  __name__ == '__main__':
         memory_growth = True,
     )
 
+    settings = PPC.tools.Settings(
+        batch_size           = 32,
+        Ne                   = 16,
+        Ng                   = 32,
+        encoder_filters      = 8,
+        forecast_dense_units = 64,
+    )
+
+    print(settings)
+
     # Select save directory
     save_dir = Path(__file__).parent.resolve() / 'models/model-001/'
 
     # If the model does not exist, create and train it
     if not save_dir.exists():
 
-        # Settings
-        settings = PPC.tools.Settings(
-            batch_size           = 32,
-            Ne                   = 16,
-            Ng                   = 32,
-            encoder_filters      = 8,
-            forecast_dense_units = 64,
-        )
+        ContrastiveSamples_inst = tools.data.ContrastiveSamples(Path(__file__).parent / 'data.h5')
 
         # Create dataset instances
-        dataset = tools.SineFrequencyDataset(
-            path       = Path(__file__).parent.resolve() / 'data.h5',
-            dataset    = 'train',
-            split      = np.array([0.8, 0.1, 0.1]),
-            batch_size = settings.batch_size,
+        dataset = tools.data.ContrastiveSamplesDataset(
+            ContrastiveSamples_inst = ContrastiveSamples_inst,
+            dataset                 = 'train',
+            split                   = np.array([0.8, 0.1, 0.1]),
+            batch_size              = settings.batch_size,
+            seed                    = 0,
         )
 
-        val_dataset = tools.SineFrequencyDataset(
-            path       = Path(__file__).parent.resolve() / 'data.h5',
-            dataset    = 'val',
-            split      = np.array([0.8, 0.1, 0.1]),
-            batch_size = settings.batch_size,
+        val_dataset = tools.data.ContrastiveSamplesDataset(
+            ContrastiveSamples_inst = ContrastiveSamples_inst,
+            dataset                 = 'val',
+            split                   = np.array([0.8, 0.1, 0.1]),
+            batch_size              = settings.batch_size,
+            seed                    = 1,
         )
 
         # Create models
         encoder_model = tools.models.encoder_model(
             Ne      = settings.Ne,
             filters = settings.encoder_filters,
-            L       = dataset.L,
+            L       = ContrastiveSamples_inst.L,
         )
 
         ar_model = tools.models.ar_model(
-            Np = dataset.Np,
+            Np = ContrastiveSamples_inst.Np,
             Ne = settings.Ne,
             Ng = settings.Ng,
         )
@@ -68,7 +74,7 @@ if  __name__ == '__main__':
             Ng          = settings.Ng,
             Ne          = settings.Ne,
             dense_units = settings.forecast_dense_units,
-        ) for _ in range(dataset.Nf)]
+        ) for _ in range(ContrastiveSamples_inst.Nf)]
 
         # Train models
         trainer = PPC.trainers.PCPC(
@@ -80,16 +86,16 @@ if  __name__ == '__main__':
         trainer.train(
             dataset            = dataset,
             val_dataset        = val_dataset,
-            forecast_loss_func = PPC.losses.ContrastiveNLLRLoss(PPC.weights.Uniform(dataset.Nf), warmup=True),
+            forecast_loss_func = PPC.losses.ContrastiveNLLRLoss(PPC.weights.Uniform(ContrastiveSamples_inst.Nf), warmup=True),
             optimizer          = tf.keras.optimizers.Adam(learning_rate=1e-4),
-            callbacks          = [PPC.callbacks.TerminateOnNaN()],
             iterations         = 5000,
+            callbacks          = [PPC.callbacks.TerminateOnNaN()],
         )
 
         trainer.train(
             dataset            = dataset,
             val_dataset        = val_dataset,
-            forecast_loss_func = PPC.losses.ContrastiveNLLRLoss(PPC.weights.Uniform(dataset.Nf), warmup=False),
+            forecast_loss_func = PPC.losses.ContrastiveNLLRLoss(PPC.weights.Uniform(ContrastiveSamples_inst.Nf), warmup=False),
             optimizer          = tf.keras.optimizers.Adam(learning_rate=1e-4),
             callbacks          = [PPC.callbacks.TerminateOnNaN(), PPC.callbacks.EarlyStopping(monitor='val_forecast_loss', patience=10000)],
         )
@@ -104,3 +110,5 @@ if  __name__ == '__main__':
 
         # Save settings
         settings.save(save_dir / 'settings.json')
+
+        ContrastiveSamples_inst.close()

@@ -5,6 +5,7 @@ import PPC
 import tensorflow as tf
 import numpy as np
 from typing import Tuple, Iterator, Optional
+import matplotlib as mpl
 
 class models:
 
@@ -78,6 +79,11 @@ class models:
 
         outputs_means = tf.keras.layers.Dense(Ne, activation='linear')(x)
         outputs_stds  = tf.keras.layers.Dense(Ne, activation='linear')(x)
+        # Note: sigma_min is the smallest standard deviation for which the Gaussian likelihood still fits in float32.
+        # It is applied to the log standard deviation y, before the exponent, so in effect the standard deviation is
+        # at least exp(sigma_min), i.e. about 1. Since PCPC has no decoder, the encoder is free to scale the latent
+        # space, and the contrastive loss and tail probabilities do not change under such a scaling, so this floor
+        # only fixes the scale of the latent space. Kept as is to match the trained models.
         outputs_stds  = tf.keras.layers.Lambda(lambda y: PPC.math.exp(tf.math.maximum(y, sigma_min)), name='Exponential')(outputs_stds)
 
         outputs = tf.keras.layers.Lambda(lambda x: tf.stack(x, axis=-1), name='Stack1D')([outputs_means, outputs_stds])
@@ -159,198 +165,235 @@ class augmentation:
 
         return model_past, model_future_pos, model_future_neg
 
-class MNISTSequenceDataset:
-    """Dataset of successive-digit MNIST sequences, with Nchi negative future samples of other digits"""
+class data:
 
-    def __init__(
-        self,
-        dataset: str,
-        batch_size: int,
-        Np: int,
-        Nf: int,
-        Nchi: int,
-        augmentation: Optional[tf.keras.Model]=None,
-        seed: int=0
-    ):
-        """Load an MNIST split and index it by digit label
+    class MNIST:
 
-        A fixed-seed stratified split of 1000 images is carved out of the Keras training set to
-        serve as the validation set.
+        def __init__(self, dataset: str, seed: int=0):
+            """Load an MNIST split and index it by digit label
 
-        Args:
-            dataset (str): which split to load, one of 'train', 'val', 'test'
-            batch_size (int): batch size
-            Np (int): number of past samples per sequence
-            Nf (int): number of future samples per sequence
-            Nchi (int): number of negative samples per future sample
-            augmentation (Optional[tf.keras.Model], optional): (past, positive future, negative future) augmentation models, as returned by augmentation.MNISTaugmentation. Defaults to None.
-            seed (int, optional): seed for the train/validation split. Defaults to 0.
-        """
+            A fixed-seed stratified split of 1000 images is carved out of the Keras training set to
+            serve as the validation set.
 
-        # Input arguments
-        self.batch_size   = batch_size
-        self.Np           = Np
-        self.Nf           = Nf
-        self.Nchi         = Nchi
-        self.augmentation = augmentation
+            Args:
+                dataset (str): which split to load, one of 'train', 'val', 'test'
+                seed (int, optional): seed for the train/validation split. Defaults to 0.
+            """
 
-        # Set seed
-        np.random.seed(seed)
+            # Random number generator for the train/validation split
+            rng = np.random.RandomState(seed)
 
-        # Load data
-        (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
+            # Load data
+            (x_train, y_train), (x_test, y_test) = tf.keras.datasets.mnist.load_data()
 
-        # Create validation dataset
-        _, counts = np.unique(y_train, return_counts=True)
-        val_counts = np.round(1000 * counts / np.sum(counts)).astype(int)
+            # Create validation dataset
+            _, counts = np.unique(y_train, return_counts=True)
+            val_counts = np.round(1000 * counts / np.sum(counts)).astype(int)
 
-        val_inds = []
+            val_inds = []
 
-        for digit, count in zip(range(10), val_counts):
-            inds = np.argwhere(y_train == digit).ravel()
-            val_inds.append(np.random.choice(inds, size=count, replace=False))
+            for digit, count in zip(range(10), val_counts):
+                inds = np.argwhere(y_train == digit).ravel()
+                val_inds.append(rng.choice(inds, size=count, replace=False))
 
-        val_inds = np.concatenate(val_inds)
+            val_inds = np.concatenate(val_inds)
 
-        x_val = x_train[val_inds, :, :]
-        y_val = y_train[val_inds]
+            x_val = x_train[val_inds, :, :]
+            y_val = y_train[val_inds]
 
-        x_train = np.delete(x_train, val_inds, axis=0)
-        y_train = np.delete(y_train, val_inds, axis=0)
+            x_train = np.delete(x_train, val_inds, axis=0)
+            y_train = np.delete(y_train, val_inds, axis=0)
 
-        # Select dataset
-        if dataset == 'train':
-            x, y = x_train, y_train
-        elif dataset == 'val':
-            x, y = x_val, y_val
-        elif dataset == 'test':
-            x, y = x_test, y_test
-        else:
-            raise ValueError('Unknown dataset {}'.format(dataset))
+            # Select dataset
+            if dataset == 'train':
+                x, y = x_train, y_train
+            elif dataset == 'val':
+                x, y = x_val, y_val
+            elif dataset == 'test':
+                x, y = x_test, y_test
+            else:
+                raise ValueError('Unknown dataset {}'.format(dataset))
 
-        self.image_shape = x_train.shape[1:]
+            # Normalize images
+            x = (x / 255).astype(np.float32)
 
-        # Normalize images
-        x = (x / 255).astype(np.float32)
+            self.dataset_with_labels = [x, y]
+            self.shape               = x.shape[1:]
 
-        # Sort data
-        unique_labels = np.unique(y)
+            # Sort data
+            unique_labels = np.unique(y)
 
-        self.dataset = {}
+            self.dataset_per_label = {}
 
-        for unique_label in unique_labels:
-            inds = np.argwhere(y == unique_label).ravel()
-            self.dataset[unique_label] = x[inds, :, :]
+            for unique_label in unique_labels:
+                inds = np.argwhere(y == unique_label).ravel()
+                self.dataset_per_label[unique_label] = x[inds, :, :]
 
-    def prepare_samples(self, *args, **kwargs) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Sample one sequence of successive digits starting at a random digit, with negative samples of other digits
+    class MNISTSequenceDataset:
+        """Dataset of successive-digit MNIST sequences, with Nchi negative future samples of other digits"""
 
-        Args:
-            *args, **kwargs: unused, present so this method can be passed to `map()` over a dummy iterable
+        def __init__(
+            self,
+            MNIST_inst: object,
+            batch_size: int,
+            Np: int,
+            Nf: int,
+            Nchi: int,
+            augmentation: Optional[tf.keras.Model]=None,
+            seed: int=0,
+        ):
+            """Build a tf.data-backed generator of successive-digit sequences from an MNIST split
 
-        Returns:
-            Tuple[np.ndarray, np.ndarray, np.ndarray]: past samples [Np, 28, 28, 1], positive future samples [Nf, 28, 28, 1] and negative future samples [Nchi, Nf, 28, 28, 1]
-        """
+            Args:
+                MNIST_inst (object): loaded MNIST split, as returned by data.MNIST
+                batch_size (int): batch size
+                Np (int): number of past samples per sequence
+                Nf (int): number of future samples per sequence
+                Nchi (int): number of negative samples per future sample
+                augmentation (Optional[tf.keras.Model], optional): (past, positive future, negative future) augmentation models, as returned by augmentation.MNISTaugmentation. Defaults to None.
+                seed (int, optional): seed of this dataset's own random number generator, used to draw the sequences. Defaults to 0.
+            """
 
-        start         = np.random.randint(0, 10)
-        labels_past   = np.mod(np.arange(start, start + self.Np), 10)
-        labels_future = np.mod(np.arange(start + self.Np, start + self.Np + self.Nf), 10)
+            # Input arguments
+            self.MNIST_inst   = MNIST_inst
+            self.batch_size   = batch_size
+            self.Np           = Np
+            self.Nf           = Nf
+            self.Nchi         = Nchi
+            self.augmentation = augmentation
 
-        samples_past = []
+            self.image_shape = self.MNIST_inst.shape
+            self.dataset     = self.MNIST_inst.dataset_per_label
 
-        for label_past in labels_past:
-            samples_past.append(self.dataset[label_past][np.random.choice(self.dataset[label_past].shape[0])])
+            # Own random number generator, so the drawn sequences do not depend on other users of np.random
+            self.rng = np.random.RandomState(seed)
 
-        samples_past = np.stack(samples_past, axis=0)
-        samples_past = np.expand_dims(samples_past, axis=-1)
+        def prepare_samples(self, *args, **kwargs) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+            """Sample one sequence of successive digits starting at a random digit, with negative samples of other digits
 
-        samples_future_pos = []
+            Args:
+                *args, **kwargs: unused, present so this method can be passed to `map()` over a dummy iterable
 
-        for label_future in labels_future:
-            samples_future_pos.append(self.dataset[label_future][np.random.choice(self.dataset[label_future].shape[0])])
+            Returns:
+                Tuple[np.ndarray, np.ndarray, np.ndarray]: past samples [Np, 28, 28, 1], positive future samples [Nf, 28, 28, 1] and negative future samples [Nchi, Nf, 28, 28, 1]
+            """
 
-        samples_future_pos = np.stack(samples_future_pos, axis=0)
-        samples_future_pos = np.expand_dims(samples_future_pos, axis=-1)
+            start         = self.rng.randint(0, 10)
+            labels_past   = np.mod(np.arange(start, start + self.Np), 10)
+            labels_future = np.mod(np.arange(start + self.Np, start + self.Np + self.Nf), 10)
 
-        samples_future_neg = [] # [Nchi, Nf, 28, 28, 1]
+            samples_past = []
 
-        for i in range(self.Nchi):
-            samples_future_neg.append([])
+            for label_past in labels_past:
+                samples_past.append(self.dataset[label_past][self.rng.choice(self.dataset[label_past].shape[0])])
+
+            samples_past = np.stack(samples_past, axis=0)
+            samples_past = np.expand_dims(samples_past, axis=-1)
+
+            samples_future_pos = []
+
             for label_future in labels_future:
-                while True:
-                    label_prop = np.random.randint(0, 10)
-                    if label_prop != label_future:
-                        break
-                samples_future_neg[-1].append(self.dataset[label_prop][np.random.choice(self.dataset[label_prop].shape[0])])
-            samples_future_neg[-1] = np.stack(samples_future_neg[-1], axis=0)
+                samples_future_pos.append(self.dataset[label_future][self.rng.choice(self.dataset[label_future].shape[0])])
 
-        samples_future_neg = np.stack(samples_future_neg, axis=0)
-        samples_future_neg = np.expand_dims(samples_future_neg, axis=-1)
+            samples_future_pos = np.stack(samples_future_pos, axis=0)
+            samples_future_pos = np.expand_dims(samples_future_pos, axis=-1)
 
-        return samples_past, samples_future_pos, samples_future_neg
+            samples_future_neg = [] # [Nchi, Nf, 28, 28, 1]
 
-    def generator(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Endlessly yield batches of past, positive future and negative future digit sequences
+            for i in range(self.Nchi):
+                samples_future_neg.append([])
+                for label_future in labels_future:
+                    while True:
+                        label_prop = self.rng.randint(0, 10)
+                        if label_prop != label_future:
+                            break
+                    samples_future_neg[-1].append(self.dataset[label_prop][self.rng.choice(self.dataset[label_prop].shape[0])])
+                samples_future_neg[-1] = np.stack(samples_future_neg[-1], axis=0)
 
-        Yields:
-            Tuple[np.ndarray, np.ndarray, np.ndarray]: batches of past, positive future and negative future samples
-        """
+            samples_future_neg = np.stack(samples_future_neg, axis=0)
+            samples_future_neg = np.expand_dims(samples_future_neg, axis=-1)
 
-        while True:
+            return samples_past, samples_future_pos, samples_future_neg
 
-            # Allocate lists for samples
-            batch_samples_past       = [None for _ in range(self.batch_size)]
-            batch_samples_future_pos = [None for _ in range(self.batch_size)]
-            batch_samples_future_neg = [None for _ in range(self.batch_size)]
+        def generator(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+            """Endlessly yield batches of past, positive future and negative future digit sequences
 
-            # Prepare samples with appropriate map function
-            for i, (samples_past, samples_future_pos, samples_future_neg) in enumerate(map(self.prepare_samples, [None]*self.batch_size)):
-                batch_samples_past[i], batch_samples_future_pos[i], batch_samples_future_neg[i] = samples_past, samples_future_pos, samples_future_neg
+            Yields:
+                Tuple[np.ndarray, np.ndarray, np.ndarray]: batches of past, positive future and negative future samples
+            """
 
-            # Stack samples in batches
-            batch_samples_past       = np.stack(batch_samples_past, axis=0)
-            batch_samples_future_pos = np.stack(batch_samples_future_pos, axis=0)
-            batch_samples_future_neg = np.stack(batch_samples_future_neg, axis=0)
+            while True:
 
-            # Yield samples
-            yield batch_samples_past, batch_samples_future_pos, batch_samples_future_neg
+                # Allocate lists for samples
+                batch_samples_past       = [None for _ in range(self.batch_size)]
+                batch_samples_future_pos = [None for _ in range(self.batch_size)]
+                batch_samples_future_neg = [None for _ in range(self.batch_size)]
 
-    def __iter__(self) -> Iterator:
-        """Iterate over batches of the underlying tf.data.Dataset
+                # Prepare samples with appropriate map function
+                for i, (samples_past, samples_future_pos, samples_future_neg) in enumerate(map(self.prepare_samples, [None]*self.batch_size)):
+                    batch_samples_past[i], batch_samples_future_pos[i], batch_samples_future_neg[i] = samples_past, samples_future_pos, samples_future_neg
+
+                # Stack samples in batches
+                batch_samples_past       = np.stack(batch_samples_past, axis=0)
+                batch_samples_future_pos = np.stack(batch_samples_future_pos, axis=0)
+                batch_samples_future_neg = np.stack(batch_samples_future_neg, axis=0)
+
+                # Yield samples
+                yield batch_samples_past, batch_samples_future_pos, batch_samples_future_neg
+
+        def __iter__(self) -> Iterator:
+            """Iterate over batches of the underlying tf.data.Dataset
+
+            Returns:
+                Iterator: iterator over (past, positive future, negative future) batches
+            """
+
+            return iter(self.tf_dataset())
+
+        def tf_dataset(self) -> tf.data.Dataset:
+            """Build the underlying tf.data.Dataset, with augmentation and prefetching applied if configured
+
+            Returns:
+                tf.data.Dataset: dataset yielding (past, positive future, negative future) batches
+            """
+
+            dataset = tf.data.Dataset.from_generator(
+                generator        = self.generator,
+                name             = 'generator',
+                output_signature = (
+                    tf.TensorSpec(shape=(self.batch_size, self.Np) + self.image_shape + (1,), dtype=tf.float32),
+                    tf.TensorSpec(shape=(self.batch_size, self.Nf) + self.image_shape + (1,), dtype=tf.float32),
+                    tf.TensorSpec(shape=(self.batch_size, self.Nchi, self.Nf) + self.image_shape + (1,), dtype=tf.float32),
+                )
+            )
+
+            if self.augmentation is not None:
+                dataset = dataset.map(
+                    map_func           = lambda x, y, z: [self.augmentation[0](x), self.augmentation[1](y), self.augmentation[2](z)],
+                    num_parallel_calls = tf.data.AUTOTUNE,
+                    deterministic      = True,
+                )
+
+            dataset = dataset.prefetch(
+                buffer_size = tf.data.AUTOTUNE,
+                name        = 'prefetch'
+            )
+
+            return dataset
+
+class colormaps:
+
+    def get_modified_oranges():
+        """Get the matplotlib 'Oranges' colormap with its lowest value forced to white
 
         Returns:
-            Iterator: iterator over (past, positive future, negative future) batches
+            matplotlib.colors.Colormap: modified 'Oranges' colormap
         """
 
-        return iter(self.tf_dataset())
+        cmap = mpl.colormaps['Oranges']
+        
+        cmap._segmentdata['red'][0, 1:]   = 1
+        cmap._segmentdata['green'][0, 1:] = 1
+        cmap._segmentdata['blue'][0, 1:]  = 1
 
-    def tf_dataset(self) -> tf.data.Dataset:
-        """Build the underlying tf.data.Dataset, with augmentation and prefetching applied if configured
-
-        Returns:
-            tf.data.Dataset: dataset yielding (past, positive future, negative future) batches
-        """
-
-        dataset = tf.data.Dataset.from_generator(
-            generator        = self.generator,
-            name             = 'generator',
-            output_signature = (
-                tf.TensorSpec(shape=(self.batch_size, self.Np) + self.image_shape + (1,), dtype=tf.float32),
-                tf.TensorSpec(shape=(self.batch_size, self.Nf) + self.image_shape + (1,), dtype=tf.float32),
-                tf.TensorSpec(shape=(self.batch_size, self.Nchi, self.Nf) + self.image_shape + (1,), dtype=tf.float32),
-            )
-        )
-
-        if self.augmentation is not None:
-            dataset = dataset.map(
-                map_func           = lambda x, y, z: [self.augmentation[0](x), self.augmentation[1](y), self.augmentation[2](z)],
-                num_parallel_calls = tf.data.AUTOTUNE,
-                deterministic      = False,
-            )
-
-        dataset = dataset.prefetch(
-            buffer_size = tf.data.AUTOTUNE,
-            name        = 'prefetch'
-        )
-
-        return dataset
+        return cmap

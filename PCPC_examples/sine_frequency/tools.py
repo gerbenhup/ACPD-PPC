@@ -4,10 +4,13 @@ sys.path.append(str((Path(__file__).parent.resolve() / '../../').resolve()))
 import PPC
 import tensorflow as tf
 import numpy as np
-from typing import Tuple, Iterator, Optional, Union
-import scipy.integrate
+from typing import Union, Optional, Tuple, Iterator
 import scipy.signal
+import scipy.integrate
+from multiprocessing import Pool
+from tqdm import tqdm
 import h5py
+import matplotlib as mpl
 
 # Parameters of the sine wave generator, shared by create_dataset.py (to generate data.h5) and test.py (to generate test signals)
 GENERATOR_SETTINGS = dict(
@@ -108,6 +111,11 @@ class models:
 
         outputs_means = tf.keras.layers.Dense(Ne, activation='linear')(x)
         outputs_stds  = tf.keras.layers.Dense(Ne, activation='linear')(x)
+        # Note: sigma_min is the smallest standard deviation for which the Gaussian likelihood still fits in float32.
+        # It is applied to the log standard deviation y, before the exponent, so in effect the standard deviation is
+        # at least exp(sigma_min), i.e. about 1. Since PCPC has no decoder, the encoder is free to scale the latent
+        # space, and the contrastive loss and tail probabilities do not change under such a scaling, so this floor
+        # only fixes the scale of the latent space. Kept as is to match the trained models.
         outputs_stds  = tf.keras.layers.Lambda(lambda y: PPC.math.exp(tf.math.maximum(y, sigma_min)), name='Exponential')(outputs_stds)
 
         outputs = tf.keras.layers.Lambda(lambda x: tf.stack(x, axis=-1), name='Stack1D')([outputs_means, outputs_stds])
@@ -310,145 +318,438 @@ class data:
 
         return signal_reshaped
 
-class SineFrequencyDataset:
-    """Dataset of past, positive future and negative future sine wave segments, read from the HDF5 file made by create_dataset.py"""
+    class contrastive_sample_helper:
+        """Picklable callable that generates a single PCPC sample for `Pool.imap`
 
-    def __init__(
-        self,
-        path: Path,
-        dataset: str,
-        split: np.ndarray,
-        batch_size: int,
-        driver: Optional[str]=None,
-        seed: int=0
-    ):
-        """
-        Args:
-            path (Path): path to the HDF5 file
-            dataset (str): which split to use, one of 'train', 'val', 'test'
-            split (np.ndarray): relative sizes of the train, validation and test splits
-            batch_size (int): batch size
-            driver (Optional[str], optional): h5py file driver. Defaults to None.
-            seed (int, optional): seed for the split. Defaults to 0.
+        A PCPC sample consists of a past signal, its positive continuation in the same frequency band, and
+        Nchi negative continuations in other frequency bands. The negative bands lie at least fm Hz away
+        from the positive band. Apart from the frequency, the negative continuations share the baseline
+        wander, amplitude and noise of the positive continuation.
         """
 
-        # Input arguments
-        self.path       = path
-        self.dataset    = dataset
-        self.split      = split
-        self.batch_size = batch_size
-        self.driver     = driver
-        self.seed       = seed
+        def __init__(
+            self,
+            Np: int,
+            Nf: int,
+            L: int,
+            Nchi: int,
+            fs: int,
+            fr: Tuple[float, float],
+            fb: float,
+            fm: float,
+            freq_change_rate: float,
+            baseline_wander_range: Tuple[float, float],
+            baseline_wander_fc: float,
+            baseline_wander_change_rate: float,
+            amplitude_range: Tuple[float, float],
+            amplitude_fc: float,
+            amplitude_change_rate: float,
+            noise_std_range: Tuple[float, float],
+            time_shift_range: Tuple[float, float],
+            seed: int,
+        ):
+            """
+            Args:
+                Np (int): number of past segments
+                Nf (int): number of future segments
+                L (int): length of a segment
+                Nchi (int): number of negative samples
+                fs (int): sampling frequency [Hz]
+                fr (Tuple[float, float]): range of the frequency bands [Hz]
+                fb (float): width of the frequency bands [Hz]
+                fm (float): minimum gap between the positive and negative frequency bands [Hz]
+                freq_change_rate (float): standard deviation of the frequency random walk
+                baseline_wander_range (Tuple[float, float]): bounds of the baseline wander
+                baseline_wander_fc (float): cutoff frequency of the baseline wander lowpass filter [Hz]
+                baseline_wander_change_rate (float): standard deviation of the baseline wander random walk
+                amplitude_range (Tuple[float, float]): bounds of the amplitude
+                amplitude_fc (float): cutoff frequency of the amplitude lowpass filter [Hz]
+                amplitude_change_rate (float): standard deviation of the amplitude random walk
+                noise_std_range (Tuple[float, float]): range of the additive noise standard deviation
+                time_shift_range (Tuple[float, float]): range of the shift of the segment boundaries, as a fraction of L
+                seed (int): seed of the dataset; sample i is generated with seed (seed, i)
+            """
 
-        # Open HDF5 file
-        self.handle = h5py.File(self.path, 'r', driver=self.driver)
+            self.Np                          = Np
+            self.Nf                          = Nf
+            self.L                           = L
+            self.Nchi                        = Nchi
+            self.fs                          = fs
+            self.fr                          = fr
+            self.fb                          = fb
+            self.fm                          = fm
+            self.freq_change_rate            = freq_change_rate
+            self.baseline_wander_range       = baseline_wander_range
+            self.baseline_wander_fc          = baseline_wander_fc
+            self.baseline_wander_change_rate = baseline_wander_change_rate
+            self.amplitude_range             = amplitude_range
+            self.amplitude_fc                = amplitude_fc
+            self.amplitude_change_rate       = amplitude_change_rate
+            self.noise_std_range             = noise_std_range
+            self.time_shift_range            = time_shift_range
+            self.seed                        = seed
 
-        # Get parameters
-        self.Np   = self.handle['collection_past'].shape[1]
-        self.L    = self.handle['collection_past'].shape[2]
-        self.Nf   = self.handle['collection_future_pos'].shape[1]
-        self.Nchi = self.handle['collection_future_neg'].shape[1]
+        def __call__(self, index: int) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+            """Generate one past sample with its positive and negative future samples
 
-        # Get indexes belonging to dataset
-        np.random.seed(self.seed)
+            Args:
+                index (int): index of the sample in the dataset, used to seed its generation
 
-        self.split  = self.split / np.sum(self.split)
-        train_count = int(np.floor(self.split[0] * self.handle['collection_past'].shape[0]))
-        val_count   = int(np.floor(self.split[1] * self.handle['collection_past'].shape[0]))
-        test_count  = int(self.handle['collection_past'].shape[0] - train_count - val_count)
+            Returns:
+                Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]: past sample [Np, L, 1], positive future sample [Nf, L, 1], negative future samples [Nchi, Nf, L, 1], positive frequency band [2] and negative frequency bands [Nchi, 2]
+            """
 
-        indexes = np.arange(self.handle['collection_past'].shape[0], dtype=int)
-        np.random.shuffle(indexes)
+            # Seed per sample, so the dataset is reproducible regardless of which worker generates which sample
+            np.random.seed([self.seed, index])
 
-        train_indexes = indexes[:train_count]
-        val_indexes   = indexes[train_count:-test_count]
-        test_indexes  = indexes[-test_count:]
+            # Determine parameters
+            time_shift = int(np.floor(self.L * np.random.uniform(self.time_shift_range[0], self.time_shift_range[1])))
+            noise_std  = float(np.random.uniform(self.noise_std_range[0], self.noise_std_range[1]))
 
-        if self.dataset == 'train':
-            self.indexes = train_indexes
-        elif self.dataset == 'val':
-            self.indexes = val_indexes
-        elif self.dataset == 'test':
-            self.indexes = test_indexes
-        else:
-            raise ValueError('dataset {} unknown'.format(self.dataset))
+            # Determine the positive and negative frequency bands. There must be at least a fm Hz gap between the bands.
+            f_band_pos  = np.random.uniform(self.fr[0], self.fr[1]-self.fb) + np.array([0, self.fb])
+            f_bands_neg = np.empty((self.Nchi, 2), dtype=np.float32)
 
-        self.choice_ind = 0
+            for i in range(self.Nchi):
+                while True:
+                    f_band_neg_cand = np.random.uniform(self.fr[0], self.fr[1]-self.fb) + np.array([0, self.fb])
 
-    def choice(self) -> np.ndarray:
-        """Draw the indexes of the next batch, reshuffling once all samples of the split have been used
+                    if f_band_neg_cand[1] < f_band_pos[0] - self.fm or f_band_neg_cand[0] > f_band_pos[1] + self.fm:
+                        f_bands_neg[i] = f_band_neg_cand
+                        break
 
-        Returns:
-            np.ndarray: indexes of the next batch
+            # Create frequency profiles
+            f_past       = data.constrained_random_walk([f_band_pos[0]] * (self.L * self.Np + time_shift), [f_band_pos[1]] * (self.L * self.Np + time_shift), self.freq_change_rate)
+            f_future_pos = data.constrained_random_walk([f_band_pos[0]] * (self.L * self.Nf - time_shift), [f_band_pos[1]] * (self.L * self.Nf - time_shift), self.freq_change_rate, last_state=f_past[-1])
+            f_future_neg = np.stack([data.constrained_random_walk([f_bands_neg[i, 0]] * (self.L * self.Nf - time_shift), [f_bands_neg[i, 1]] * (self.L * self.Nf - time_shift), self.freq_change_rate, last_state=f_past[-1]) for i in range(len(f_bands_neg))], axis=0)
+
+            # Create baseline wander profile
+            baseline_wander_profile = data.smoothened_random_walk((self.Np + self.Nf) * self.L, self.baseline_wander_range[0], self.baseline_wander_range[1], self.fs, self.baseline_wander_fc, self.baseline_wander_change_rate)
+
+            # Create amplitude profile
+            amplitude_profile = data.smoothened_random_walk((self.Np + self.Nf) * self.L, self.amplitude_range[0], self.amplitude_range[1], self.fs, self.amplitude_fc, self.amplitude_change_rate)
+
+            # Create noise profile
+            noise_profile = data.create_noise_profile((self.Np + self.Nf) * self.L, noise_std)
+
+            # Create final signals
+            sample_pos   = data.create_sine_profile(np.concatenate([f_past, f_future_pos]), self.fs)
+            sample_pos  *= amplitude_profile
+            sample_pos  += baseline_wander_profile
+            sample_pos  += noise_profile
+
+            samples_neg  = np.stack([data.create_sine_profile(np.concatenate([f_past, x]), self.fs) for x in f_future_neg], axis=0)
+            samples_neg *= amplitude_profile
+            samples_neg += baseline_wander_profile
+            samples_neg += noise_profile
+
+            # Reshape to PCPC output
+            sample_past        = sample_pos[:(self.L * self.Np)]
+            sample_past        = np.reshape(sample_past, (self.Np, self.L, 1))
+            sample_future_pos  = sample_pos[(self.L * self.Np):]
+            sample_future_pos  = np.reshape(sample_future_pos, (self.Nf, self.L, 1))
+            samples_future_neg = samples_neg[:, (self.L * self.Np):]
+            samples_future_neg = np.reshape(samples_future_neg, (self.Nchi, self.Nf, self.L, 1))
+
+            return sample_past, sample_future_pos, samples_future_neg, f_band_pos, f_bands_neg
+
+    class ContrastiveSamples:
+        """Collection of past, positive future and negative future signal segments, used for PCPC training
+
+        Backed by an HDF5 file. Because the full training file is large (~35 GB), it is not loaded into
+        memory: batches are read from the open file. Use `ContrastiveSamples.create(...)` to generate a
+        new HDF5 file, or the constructor to open an existing one.
         """
 
-        if self.choice_ind > len(self.indexes) - self.batch_size:
-            np.random.shuffle(self.indexes)
+        def __init__(self, path: Path):
+            """Open a contrastive samples collection from an existing HDF5 file
+
+            Args:
+                path (Path): HDF5 file, as created by `ContrastiveSamples.create(...)`
+            """
+
+            self.handle = h5py.File(path, 'r')
+
+            self.past_data       = self.handle['collection_past']       # [N, Np, L, 1]
+            self.future_pos_data = self.handle['collection_future_pos'] # [N, Nf, L, 1]
+            self.future_neg_data = self.handle['collection_future_neg'] # [N, Nchi, Nf, L, 1]
+
+            self.Np   = self.past_data.shape[1]
+            self.L    = self.past_data.shape[2]
+            self.Nf   = self.future_pos_data.shape[1]
+            self.Nchi = self.future_neg_data.shape[1]
+
+        def create(
+            path: Path,
+            size: int,
+            Np: int,
+            Nf: int,
+            L: int,
+            Nchi: int,
+            fs: int,
+            fr: Tuple[float, float],
+            fb: float,
+            fm: float,
+            freq_change_rate: float,
+            baseline_wander_range: Tuple[float, float],
+            baseline_wander_fc: float,
+            baseline_wander_change_rate: float,
+            amplitude_range: Tuple[float, float],
+            amplitude_fc: float,
+            amplitude_change_rate: float,
+            noise_std_range: Tuple[float, float],
+            time_shift_range: Tuple[float, float],
+            workers: int=1,
+            seed: int=0,
+        ) -> 'data.ContrastiveSamples':
+            """Generate `size` contrastive samples and save them to an HDF5 file
+
+            Args:
+                path (Path): HDF5 file to write
+                size (int): number of samples to generate
+                workers (int, optional): number of worker processes to generate samples in parallel. Defaults to 1.
+                seed (int, optional): seed of the dataset; sample i is generated with seed (seed, i). Defaults to 0.
+                (all other args): see `data.contrastive_sample_helper`
+
+            Returns:
+                data.ContrastiveSamples: the generated collection, opened from the newly written file
+            """
+
+            if workers == 1:
+                map_func   = map
+                close_func = lambda: None
+            elif workers > 1:
+                pool       = Pool(workers)
+                map_func   = pool.imap
+                close_func = pool.close
+
+            generator = data.contrastive_sample_helper(
+                Np,
+                Nf,
+                L,
+                Nchi,
+                fs,
+                fr,
+                fb,
+                fm,
+                freq_change_rate,
+                baseline_wander_range,
+                baseline_wander_fc,
+                baseline_wander_change_rate,
+                amplitude_range,
+                amplitude_fc,
+                amplitude_change_rate,
+                noise_std_range,
+                time_shift_range,
+                seed,
+            )
+
+            collection_past       = []
+            collection_future_pos = []
+            collection_future_neg = []
+            collection_band_pos   = []
+            collection_bands_neg  = []
+
+            for sample_past, sample_future_pos, samples_future_neg, f_band_pos, f_bands_neg in tqdm(map_func(generator, range(size)), total=size):
+                collection_past.append(sample_past)
+                collection_future_pos.append(sample_future_pos)
+                collection_future_neg.append(samples_future_neg)
+                collection_band_pos.append(f_band_pos)
+                collection_bands_neg.append(f_bands_neg)
+
+            close_func()
+
+            with h5py.File(path, 'w') as hf:
+                hf.create_dataset('collection_past',       data=np.stack(collection_past, axis=0))
+                hf.create_dataset('collection_future_pos', data=np.stack(collection_future_pos, axis=0))
+                hf.create_dataset('collection_future_neg', data=np.stack(collection_future_neg, axis=0))
+                hf.create_dataset('collection_band_pos',   data=np.stack(collection_band_pos, axis=0))
+                hf.create_dataset('collection_bands_neg',  data=np.stack(collection_bands_neg, axis=0))
+
+            return data.ContrastiveSamples(path)
+
+        def close(self):
+            """Close the HDF5 file"""
+
+            self.handle.close()
+
+    class ContrastiveSamplesDataset:
+        """tf.data-backed, batched, shuffled generator over one split of a `ContrastiveSamples` collection"""
+
+        def __init__(self, ContrastiveSamples_inst: 'data.ContrastiveSamples', dataset: str, split: np.ndarray, batch_size: int, seed: int=0):
+            """
+            Args:
+                ContrastiveSamples_inst (data.ContrastiveSamples): opened contrastive samples collection to iterate over
+                dataset (str): which split to use, one of 'train', 'val', 'test'
+                split (np.ndarray): relative sizes of the train, validation and test splits. The split itself is always drawn with seed 0, so all splits are disjoint.
+                batch_size (int): batch size
+                seed (int, optional): seed of this dataset's own random number generator, used for shuffling sample order. Defaults to 0.
+            """
+
+            self.ContrastiveSamples_inst = ContrastiveSamples_inst
+            self.batch_size              = batch_size
+
+            # Divide the samples into train, validation and test splits, with a fixed seed
+            num_samples = self.ContrastiveSamples_inst.past_data.shape[0]
+            split       = split / np.sum(split)
+            train_count = int(np.floor(split[0] * num_samples))
+            val_count   = int(np.floor(split[1] * num_samples))
+            test_count  = int(num_samples - train_count - val_count)
+
+            indexes = np.arange(num_samples, dtype=int)
+            np.random.RandomState(0).shuffle(indexes)
+
+            if dataset == 'train':
+                self.indexes = indexes[:train_count]
+            elif dataset == 'val':
+                self.indexes = indexes[train_count:-test_count]
+            elif dataset == 'test':
+                self.indexes = indexes[-test_count:]
+            else:
+                raise ValueError('dataset {} unknown'.format(dataset))
+
+            # Own random number generator, so the sample order does not depend on other users of np.random
+            self.rng        = np.random.RandomState(seed)
             self.choice_ind = 0
 
-        inds = self.indexes[self.choice_ind:self.choice_ind+self.batch_size]
-        self.choice_ind += self.batch_size
+        def choice(self) -> np.ndarray:
+            """Draw the indexes of the next batch, reshuffling once all samples of the split have been used
 
-        return inds
+            Returns:
+                np.ndarray: indexes of the next batch
+            """
 
-    def generator(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-        """Endlessly yield batches of past, positive future and negative future segments
+            if self.choice_ind > len(self.indexes) - self.batch_size:
+                self.rng.shuffle(self.indexes)
+                self.choice_ind = 0
 
-        Yields:
-            Tuple[np.ndarray, np.ndarray, np.ndarray]: shapes [B, Np, L, 1], [B, Nf, L, 1] and [B, Nchi, Nf, L, 1]
+            inds = self.indexes[self.choice_ind:self.choice_ind+self.batch_size]
+            self.choice_ind += self.batch_size
+
+            return inds
+
+        def generator(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+            """Endlessly yield batches of past, positive future and negative future segments
+
+            Yields:
+                Tuple[np.ndarray, np.ndarray, np.ndarray]: shapes [B, Np, L, 1], [B, Nf, L, 1] and [B, Nchi, Nf, L, 1]
+            """
+
+            while True:
+
+                # HDF5 requires increasing indexes
+                inds = np.sort(self.choice())
+
+                batch_past       = self.ContrastiveSamples_inst.past_data[inds]
+                batch_future_pos = self.ContrastiveSamples_inst.future_pos_data[inds]
+                batch_future_neg = self.ContrastiveSamples_inst.future_neg_data[inds]
+
+                yield batch_past, batch_future_pos, batch_future_neg
+
+        def __iter__(self) -> Iterator:
+            """Iterate over batches of the underlying tf.data.Dataset
+
+            Returns:
+                Iterator: iterator over (past, positive future, negative future) batches
+            """
+
+            return iter(self.tf_dataset())
+
+        def tf_dataset(self) -> tf.data.Dataset:
+            """Build the underlying, prefetched tf.data.Dataset
+
+            Returns:
+                tf.data.Dataset: dataset yielding (past, positive future, negative future) batches
+            """
+
+            Np, Nf, L, Nchi = self.ContrastiveSamples_inst.Np, self.ContrastiveSamples_inst.Nf, self.ContrastiveSamples_inst.L, self.ContrastiveSamples_inst.Nchi
+
+            # Convert generator to TensorFlow dataset
+            dataset = tf.data.Dataset.from_generator(
+                generator        = self.generator,
+                name             = 'generator',
+                output_signature = (
+                    tf.TensorSpec(shape=(self.batch_size, Np, L, 1), dtype=tf.float32),
+                    tf.TensorSpec(shape=(self.batch_size, Nf, L, 1), dtype=tf.float32),
+                    tf.TensorSpec(shape=(self.batch_size, Nchi, Nf, L, 1), dtype=tf.float32),
+                ),
+            )
+
+            # Prefetch next batch for potentially better performance
+            dataset = dataset.prefetch(
+                buffer_size = tf.data.AUTOTUNE,
+                name        = 'prefetch',
+            )
+
+            return dataset
+
+    class GridSamples:
+        """Collection of signal segments generated over a systematic grid of past/future center frequencies
+
+        Loads the test set of the PPC sine experiment, as created by PPC_examples/sine_frequency/generate_datasets.py,
+        so PPC and PCPC are evaluated on exactly the same samples.
         """
 
-        while True:
+        def __init__(self, path: Path):
+            """Load a grid-samples collection from an existing HDF5 file
 
-            inds = self.choice()
-            inds = np.sort(inds)
+            Args:
+                path (Path): HDF5 file, as created by `GridSamples.create(...)` in PPC_examples/sine_frequency/tools.py
+            """
 
-            batch_past       = self.handle['collection_past'][inds]
-            batch_future_pos = self.handle['collection_future_pos'][inds]
-            batch_future_neg = self.handle['collection_future_neg'][inds]
+            with h5py.File(path, 'r') as hf:
+                self.data       = hf['collection'][:]
+                self.gridsize   = hf['collection'].attrs.get('gridsize')
+                self.iterations = hf['collection'].attrs.get('iterations')
+                self.Np         = hf['collection'].attrs.get('Np')
+                self.Nf         = hf['collection'].attrs.get('Nf')
+                self.L          = hf['collection'].attrs.get('L')
+                self.fs         = hf['collection'].attrs.get('fs')
+                self.fr         = hf['collection'].attrs.get('fr')
+                self.fb         = hf['collection'].attrs.get('fb')
 
-            yield batch_past, batch_future_pos, batch_future_neg
+            self.flat_data   = np.reshape(self.data, (self.data.shape[0], self.data.shape[1]*self.data.shape[2], self.data.shape[3]))
+            self.past_data   = self.data[:, :self.Np, ...]
+            self.future_data = self.data[:, self.Np:, ...]
 
-    def __iter__(self) -> Iterator:
-        """Iterate over batches of the underlying tf.data.Dataset
+            self.grid            = np.linspace(self.fr[0]+0.5*self.fb, self.fr[1]-0.5*self.fb, self.gridsize, endpoint=True)
+            self.f_center_past   = np.repeat(np.repeat(self.grid, len(self.grid)), self.iterations)
+            self.f_center_future = np.repeat(np.tile(self.grid, len(self.grid)), self.iterations)
+
+    class PositiveNegativeSamples:
+        """Labelled collection of conforming ("positive") and frequency-changed ("negative") signal segments
+
+        Loads the metric sets of the PPC sine experiment, as created by PPC_examples/sine_frequency/generate_datasets.py,
+        so PPC and PCPC are evaluated on exactly the same samples.
+        """
+
+        def __init__(self, path: Path):
+            """Load a labelled positive/negative samples collection from an existing HDF5 file
+
+            Args:
+                path (Path): HDF5 file, as created by `PositiveNegativeSamples.create(...)` in PPC_examples/sine_frequency/tools.py
+            """
+
+            with h5py.File(path, 'r') as hf:
+                self.pos_samples = hf['pos_samples'][:]
+                self.neg_samples = hf['neg_samples'][:]
+
+            self.samples        = np.concatenate([self.pos_samples, self.neg_samples], axis=0)
+            self.anomaly_labels = np.concatenate([np.zeros(len(self.pos_samples)), np.ones(len(self.neg_samples))])
+
+class colormaps:
+
+    def get_modified_oranges():
+        """Get the matplotlib 'Oranges' colormap with its lowest value forced to white
 
         Returns:
-            Iterator: iterator over (past, positive future, negative future) batches
+            matplotlib.colors.Colormap: modified 'Oranges' colormap
         """
 
-        return iter(self.tf_dataset())
+        cmap = mpl.colormaps['Oranges']
 
-    def tf_dataset(self) -> tf.data.Dataset:
-        """Create TensorFlow dataset
+        cmap._segmentdata['red'][0, 1:]   = 1
+        cmap._segmentdata['green'][0, 1:] = 1
+        cmap._segmentdata['blue'][0, 1:]  = 1
 
-        Returns:
-            tf.data.Dataset: TensorFlow dataset
-        """
-
-        # Convert generator to TensorFlow dataset
-        dataset = tf.data.Dataset.from_generator(
-            generator        = self.generator,
-            name             = 'generator',
-            output_signature = (
-                tf.TensorSpec(shape=(self.batch_size, self.Np, self.L, 1), dtype=tf.float32),
-                tf.TensorSpec(shape=(self.batch_size, self.Nf, self.L, 1), dtype=tf.float32),
-                tf.TensorSpec(shape=(self.batch_size, self.Nchi, self.Nf, self.L, 1), dtype=tf.float32),
-            ),
-        )
-
-        # Prefetch next batch for potentially better performance
-        dataset = dataset.prefetch(
-            buffer_size = tf.data.AUTOTUNE,
-            name        = 'prefetch',
-        )
-
-        return dataset
-
-    def __del__(self):
-
-        self.handle.close()
-
-    def close(self):
-        """Close the HDF5 file"""
-
-        self.handle.close()
+        return cmap
