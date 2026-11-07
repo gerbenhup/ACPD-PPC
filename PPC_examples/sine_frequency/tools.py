@@ -876,8 +876,9 @@ class data:
 
                 for i in range(int(len(self.inds)/self.batch_size)):
 
-                    past_data   = self.PositiveSample_inst.past_data[i*self.batch_size:(i+1)*self.batch_size, ...]
-                    future_data = self.PositiveSample_inst.future_data[i*self.batch_size:(i+1)*self.batch_size, ...]
+                    inds        = self.inds[i*self.batch_size:(i+1)*self.batch_size]
+                    past_data   = self.PositiveSample_inst.past_data[inds, ...]
+                    future_data = self.PositiveSample_inst.future_data[inds, ...]
 
                     yield past_data, future_data
 
