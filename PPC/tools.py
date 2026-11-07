@@ -143,3 +143,51 @@ def load_ppc_models(dir: Path) -> Tuple[tf.keras.Model, tf.keras.Model, tf.keras
             forecast_models.append(load_model(dir, line))
 
     return encoder_model, decoder_model, ar_model, forecast_models
+
+def save_pcpc_models(dir: Path, encoder_model: tf.keras.Model, ar_model: tf.keras.Model, forecast_models: list[tf.keras.Model]) -> None:
+    """Save all models of a PCPC pipeline (encoder, autoregressive and forecast models) to a directory
+
+    Args:
+        dir (Path): directory to save the models in
+        encoder_model (tf.keras.Model): encoder model
+        ar_model (tf.keras.Model): autoregressive model
+        forecast_models (list[tf.keras.Model]): forecast models
+    """
+
+    dir.mkdir(parents=True, exist_ok=True)
+
+    with open(dir / 'pcpc_models.txt', 'w') as f:
+
+        save_model(encoder_model, dir, 'encoder_model')
+        f.write('encoder_model\n')
+        save_model(ar_model, dir, 'ar_model')
+        f.write('ar_model\n')
+
+        for i, forecast_model in enumerate(forecast_models):
+            save_model(forecast_model, dir, 'forecast_model_{}'.format(i))
+            f.write('forecast_model_{}\n'.format(i))
+
+def load_pcpc_models(dir: Path) -> Tuple[tf.keras.Model, tf.keras.Model, list[tf.keras.Model]]:
+    """Load all models of a PCPC pipeline (encoder, autoregressive and forecast models) from a directory
+
+    Args:
+        dir (Path): directory the models were saved in
+
+    Returns:
+        Tuple[tf.keras.Model, tf.keras.Model, list[tf.keras.Model]]: encoder, autoregressive and forecast models
+    """
+
+    with open(dir / 'pcpc_models.txt', 'r') as f:
+        models = f.read().strip().split('\n')
+
+    forecast_models = []
+
+    for line in models:
+        if line == 'encoder_model':
+            encoder_model = load_model(dir, 'encoder_model')
+        elif line == 'ar_model':
+            ar_model = load_model(dir, 'ar_model')
+        elif 'forecast' in line:
+            forecast_models.append(load_model(dir, line))
+
+    return encoder_model, ar_model, forecast_models

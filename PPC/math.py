@@ -48,3 +48,27 @@ def square(x: tf.Tensor) -> tf.Tensor:
     x_square  = tf.math.square(x_clipped)
 
     return x_square
+
+def sqrt(x: tf.Tensor) -> tf.Tensor:
+    """Placeholder safe sqrt function. Currently, no operations are expected to give unsafe inputs.
+
+    Args:
+        x (tf.Tensor): input value
+
+    Returns:
+        tf.Tensor: square root of input value
+    """
+
+    return tf.math.sqrt(x)
+
+def abs(x: tf.Tensor) -> tf.Tensor:
+    """Placeholder safe abs function. Currently, no operations are expected to give unsafe inputs.
+
+    Args:
+        x (tf.Tensor): input value
+
+    Returns:
+        tf.Tensor: absolute value of input value
+    """
+
+    return tf.math.abs(x)

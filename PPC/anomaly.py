@@ -11,7 +11,7 @@ class Anomaly:
         Args:
             encoder_model (tf.keras.Model): encoder model, [B, ...] -> [B, Ne]
             ar_model (tf.keras.Model): autoregressive model, [B, Np, Ne] -> [B, Np, Ng]. GRU/LSTM option return_sequences must be set to True.
-            forecast_models (list[tf.keras.Model]): list of Nf models, ([B, Ng], [B, Na]) -> [B, Ne, 2]
+            forecast_models (list[tf.keras.Model]): list of Nf models, [B, Ng] -> [B, Ne, 2]
         """
 
         # Input arguments

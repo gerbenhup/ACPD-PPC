@@ -1,6 +1,36 @@
 from typing import Tuple
 import numpy as np
 import sklearn.decomposition
+import sklearn.manifold
+
+class TSNE:
+    """Thin wrapper around scikit-learn's t-SNE"""
+
+    def __init__(self, n_components: int, perplexity: float):
+        """
+        Args:
+            n_components (int): dimensionality of the embedded space
+            perplexity (float): t-SNE perplexity, related to the number of nearest neighbours considered
+        """
+
+        self.n_components = n_components
+        self.perplexity   = perplexity
+        self.tsne         = sklearn.manifold.TSNE(
+            n_components = self.n_components,
+            perplexity   = self.perplexity,
+        )
+
+    def fit_transform(self, encodings: np.ndarray) -> np.ndarray:
+        """Fit t-SNE on the given encodings and return their low-dimensional embedding
+
+        Args:
+            encodings (np.ndarray): encodings to embed, shape [N, Ne]
+
+        Returns:
+            np.ndarray: embedded encodings, shape [N, n_components]
+        """
+
+        return self.tsne.fit_transform(encodings)
 
 class PCA:
     """Thin wrapper around scikit-learn's PCA, extended to also project Gaussian forecast distributions"""

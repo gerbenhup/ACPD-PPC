@@ -4,6 +4,32 @@ import tensorflow_probability as tfp
 
 from . import math
 
+def GaussianLikelihood(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) -> tf.Tensor:
+    """Gaussian likelihood function
+
+    Args:
+        encodings_true (tf.Tensor): true encodings, shape [..., Ne]
+        encodings_pred (tf.Tensor): predicted encoding distributions, shape [..., Ne, 2]. The last channel contains means and standard deviations.
+
+    Returns:
+        tf.Tensor: Gaussian likelihood, shape [...]
+    """
+
+    return tf.math.reduce_prod((1/(math.sqrt(2*np.pi)*encodings_pred[..., 1]))*math.exp(-tf.math.square(encodings_true - encodings_pred[..., 0])/(2*math.square(encodings_pred[..., 1]))), axis=-1)
+
+def GaussianLikelihoodUnitVariance(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) -> tf.Tensor:
+    """Gaussian likelihood function which assumes unit variance
+
+    Args:
+        encodings_true (tf.Tensor): true encodings, shape [..., Ne]
+        encodings_pred (tf.Tensor): predicted encoding distributions, shape [..., Ne, 2]. Only the means (channel 0) are used.
+
+    Returns:
+        tf.Tensor: Gaussian likelihood, shape [...]
+    """
+
+    return tf.math.reduce_prod((1/(math.sqrt(2*np.pi)))*math.exp(-tf.math.square(encodings_true - encodings_pred[..., 0])/2), axis=-1)
+
 def GaussianLogLikelihood(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) -> tf.Tensor:
     """Gaussian log likelihood function
 
@@ -42,6 +68,49 @@ def GaussianExpNormLogLikelihood(encodings_true: tf.Tensor, encodings_pred: tf.T
     """
 
     loglikelihood  = GaussianLogLikelihood(encodings_true, encodings_pred)
+    loglikelihood -= tf.math.reduce_max(loglikelihood)
+    likelihood     = math.exp(loglikelihood)
+
+    return likelihood
+
+def LaplaceLogLikelihood(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) -> tf.Tensor:
+    """Laplace log likelihood function
+
+    Args:
+        encodings_true (tf.Tensor): true encodings, shape [..., Ne]
+        encodings_pred (tf.Tensor): predicted encoding distributions, shape [..., Ne, 2]. The last channel contains locations and scales.
+
+    Returns:
+        tf.Tensor: Laplace log likelihood, shape [...]
+    """
+
+    return -encodings_pred.shape[-2]*math.log(2.0) - tf.math.reduce_sum(math.log(encodings_pred[..., 1]), axis=-1) - tf.math.reduce_sum(math.abs(encodings_true - encodings_pred[..., 0]) / encodings_pred[..., 1], axis=-1)
+
+def LaplaceLogLikelihoodUnitScale(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) -> tf.Tensor:
+    """Laplace log likelihood function which assumes unit scale
+
+    Args:
+        encodings_true (tf.Tensor): true encodings, shape [..., Ne]
+        encodings_pred (tf.Tensor): predicted encoding distributions, shape [..., Ne, 2]. Only the locations (channel 0) are used.
+
+    Returns:
+        tf.Tensor: Laplace log likelihood, shape [...]
+    """
+
+    return -encodings_pred.shape[-2]*math.log(2.0) - tf.math.reduce_sum(math.abs(encodings_true - encodings_pred[..., 0]), axis=-1)
+
+def LaplaceExpNormLogLikelihood(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) -> tf.Tensor:
+    """Laplace likelihood function with exp-log trick for numerical stability
+
+    Args:
+        encodings_true (tf.Tensor): true encodings
+        encodings_pred (tf.Tensor): predicted encoding distributions
+
+    Returns:
+        tf.Tensor: Laplace likelihood
+    """
+
+    loglikelihood  = LaplaceLogLikelihood(encodings_true, encodings_pred)
     loglikelihood -= tf.math.reduce_max(loglikelihood)
     likelihood     = math.exp(loglikelihood)
 
