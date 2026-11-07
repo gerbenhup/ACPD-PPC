@@ -96,8 +96,9 @@ if  __name__ == '__main__':
         loglikelihoods_agg = np.array(tf.math.reduce_mean(loglikelihoods_res, axis=1))
         probabilities_agg  = np.array(tf.math.reduce_mean(probabilities_res, axis=1))
 
-        loglikelihoods_mat = np.reshape(loglikelihoods_agg, (test_GridSamples_inst.gridsize, test_GridSamples_inst.gridsize))
-        probabilities_mat  = np.reshape(probabilities_agg, (test_GridSamples_inst.gridsize, test_GridSamples_inst.gridsize))
+        # Matrices indexed [past frequency, future frequency], transposed so the past frequency is on the x-axis
+        loglikelihoods_mat = np.reshape(loglikelihoods_agg, (test_GridSamples_inst.gridsize, test_GridSamples_inst.gridsize)).T
+        probabilities_mat  = np.reshape(probabilities_agg, (test_GridSamples_inst.gridsize, test_GridSamples_inst.gridsize)).T
 
         # Figure: log-likelihood / probability of conformance heatmap over the frequency grid
         plt.figure(figsize=[6.85, 3])
