@@ -6,19 +6,33 @@ loops, losses, probability/anomaly-scoring utilities), split into one module per
 
 | Module | Contents |
 | --- | --- |
-| `PPC.trainers` | `PPC` trainer class: train/train_step/test_step |
+| `PPC.trainers` | `PPC` and `PCPC` trainer classes: train/train_step/test_step |
 | `PPC.anomaly` (`PPC.Anomaly`) | Online anomaly-scoring class |
-| `PPC.losses` | `MeanSquaredError`, `MaximumLogLikelihoodLoss` |
-| `PPC.probability` | Gaussian log-likelihoods, Mahalanobis distance, tail probabilities |
-| `PPC.dimension` | `PCA` wrapper (with Gaussian projection) |
+| `PPC.losses` | `MeanSquaredError`, `MaximumLogLikelihoodLoss` (Gaussian or Laplace prior), `ContrastiveNLLRLoss` (PCPC) |
+| `PPC.probability` | Gaussian (log-)likelihoods, Laplace log-likelihoods, Mahalanobis distance, tail probabilities |
+| `PPC.dimension` | `PCA` wrapper (with Gaussian projection), `TSNE` wrapper |
 | `PPC.wrappers` | `TimeDistributed`, `TimeStacked` Keras model wrappers |
 | `PPC.weights` | Loss time-weighting schemes |
-| `PPC.math` | Numerically-safe `log`/`exp`/`square` |
-| `PPC.callbacks` | `TerminateOnNaN`, `RestoreOnEarlyStopping` |
-| `PPC.tools` | `Settings`, model save/load helpers |
+| `PPC.math` | Numerically-safe `log`/`exp`/`square`/`sqrt`/`abs` |
+| `PPC.callbacks` | `TerminateOnNaN`, `RestoreOnEarlyStopping`, `EarlyStopping`, `ReduceLROnPlateau` |
+| `PPC.tools` | `Settings`, PPC/PCPC model save/load helpers |
 | `PPC.gpu` | GPU discovery/selection via `nvidia-smi` |
 
-`PPC_examples/` contains the three experiments from the paper.
+`PPC_examples/` contains the three experiments from the paper. `PCPC_examples/` contains the
+Probabilistic Contrastive Predictive Coding (PCPC) variant on two of these experiments.
+
+### Laplace prior
+
+By default the forecast models predict a Gaussian distribution over the future encodings (mean and
+standard deviation per encoding dimension). To use a Laplace distribution instead (location and
+scale), pass `distribution='Laplace'` to the forecast loss:
+
+```python
+PPC.losses.MaximumLogLikelihoodLoss(PPC.weights.Uniform(Nf), warmup=False, distribution='Laplace')
+```
+
+The forecast model architecture stays the same; only the interpretation of its two output channels
+changes.
 
 ## Setup
 
@@ -83,6 +97,42 @@ the same settings resumes/skips training if the directory already exists. `test.
 every model directory under `models/`, producing `mnist-matrix.pdf` (Figure 6), `mnist-curves.pdf`
 (Figure 7), `mnist-latent-hexbin.pdf` (Figure 8), and printing the full set of threshold-dependent
 detection metrics (best threshold selected on a validation split, evaluated on the test split).
+
+## PCPC experiments
+
+`PCPC_examples/` trains the encoder, autoregressive and forecast models without a decoder. Instead
+of a reconstruction loss, the forecast distribution is trained contrastively
+(`PPC.losses.ContrastiveNLLRLoss`): the likelihood of the true future sample is maximized relative
+to the mean likelihood of `Nchi` negative samples. Models are trained by `PPC.trainers.PCPC` and
+saved to `models/model-001/`. As above, run the scripts from within each example's directory.
+
+### `PCPC_examples/sine_frequency`
+
+The training data (`data.h5`, ~35 GB, 1,000,000 samples with 9 negative samples each) must be
+generated once before training. The generator settings are shared between dataset generation and
+testing via `tools.GENERATOR_SETTINGS`.
+
+```
+python create_dataset.py
+python train.py
+python test.py
+```
+
+`test.py` sweeps all combinations of center frequencies before and after the change point, and
+saves the mean probability of conformance as `pcpc-sine-matrix.pdf` in the model directory.
+
+### `PCPC_examples/mnist_sequence`
+
+MNIST is downloaded automatically by Keras on first use; negative samples are digits other than
+the successor digit.
+
+```
+python train.py
+python test.py
+```
+
+`test.py` saves the t-SNE and PCA projections of the latent space and the log-likelihood and
+probability of conformance matrices (per sample pair and per digit pair) in the model directory.
 
 ## Citation
 
