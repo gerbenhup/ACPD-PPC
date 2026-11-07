@@ -116,6 +116,19 @@ def LaplaceExpNormLogLikelihood(encodings_true: tf.Tensor, encodings_pred: tf.Te
 
     return likelihood
 
+def MahalanobisDistance(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) -> tf.Tensor:
+    """Mahalanobis distance
+
+    Args:
+        encodings_true (tf.Tensor): sample from the multivariate Gaussian distribution, shape [..., Ne]
+        encodings_pred (tf.Tensor): multivariate Gaussian distribution parameters, shape [..., Ne, 2]. The last channel contains means and standard deviations.
+
+    Returns:
+        tf.Tensor: Mahalanobis distance
+    """
+
+    return math.sqrt(tf.math.reduce_sum(math.square(encodings_true - encodings_pred[..., 0]) / math.square(encodings_pred[..., 1]), axis=-1))
+
 def SquaredMahalanobisDistance(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) -> tf.Tensor:
     """Mahalanobis distance
 

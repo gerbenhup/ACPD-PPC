@@ -1,8 +1,10 @@
-from typing import Tuple
+from typing import Tuple, Union, List
 from pathlib import Path
 import json
 import sys
 import hashlib
+import argparse
+import numpy as np
 import tensorflow as tf
 
 import PPC
@@ -58,6 +60,43 @@ class Settings:
         digest = hashlib.sha256(json.dumps(vars(self), sort_keys=True).encode()).hexdigest()
 
         return int(digest, 16) % (2**63)
+
+class Arguments:
+    """Command line arguments with default values, e.g. `Arguments(gpu=0)` accepts `--gpu 1`"""
+
+    def __init__(self, **kwargs):
+        """
+        Args:
+            **kwargs: argument names and default values. A value given on the command line is converted to the type of its default value.
+        """
+
+        argparser = argparse.ArgumentParser()
+
+        for name in kwargs:
+            argparser.add_argument('--{}'.format(name))
+
+        cli_args = argparser.parse_args()
+
+        for name in kwargs:
+            if getattr(cli_args, name) is not None:
+                setattr(self, name, type(kwargs[name])(getattr(cli_args, name)))
+            else:
+                setattr(self, name, kwargs[name])
+
+def num_trainable_weights(input_: Union[tf.keras.Model, List[tf.keras.Model]]) -> int:
+    """Count the number of trainable weights of a model, or of a (nested) list of models
+
+    Args:
+        input_ (Union[tf.keras.Model, List[tf.keras.Model]]): model or list of models
+
+    Returns:
+        int: number of trainable weights
+    """
+
+    if isinstance(input_, list):
+        return np.sum([num_trainable_weights(model) for model in input_])
+    else:
+        return np.sum([np.prod(weights.shape) for weights in input_.trainable_weights])
 
 def save_model(model: tf.keras.Model, dir: Path, name: str):
     """Save a single model's architecture (JSON) and weights (H5) to a directory

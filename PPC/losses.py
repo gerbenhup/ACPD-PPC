@@ -2,6 +2,30 @@ import tensorflow as tf
 
 from . import probability, math
 
+class MeanAbsoluteError:
+    """Mean absolute error reconstruction loss"""
+
+    def __init__(self):
+        pass
+
+    def __call__(self, samples_past: tf.Tensor, decodings_past: tf.Tensor, samples_future: tf.Tensor, decodings_future: tf.Tensor) -> tf.Tensor:
+        """Call function
+
+        Args:
+            samples_past (tf.Tensor): Samples in past, [B, Np, ...]
+            decodings_past (tf.Tensor): Decoded encodings in past, [B, Np, ...]
+            samples_future (tf.Tensor): Samples in future, [B, Nf, ...]
+            decodings_future (tf.Tensor): Decoded encodings in future, [B, Nf, ...]
+
+        Returns:
+            tf.Tensor: loss values
+        """
+
+        samples   = tf.concat([samples_past, samples_future], axis=1)
+        decodings = tf.concat([decodings_past, decodings_future], axis=1)
+
+        return tf.math.reduce_mean(tf.math.abs(samples - decodings))
+
 class MeanSquaredError:
     """Mean squared error reconstruction loss"""
 
