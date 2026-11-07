@@ -5,7 +5,7 @@ import tensorflow as tf
 from . import wrappers
 
 class PPC:
-    """Trainer for Probabilistic Predictive Coding: encoder/decoder autoencoder combined with a probabilistic forecast of future encodings"""
+    """Trainer for PPC: encoder, decoder, autoregressive and forecast models"""
 
     def __init__(self, encoder_model: tf.keras.Model, decoder_model: tf.keras.Model, ar_model: tf.keras.Model, forecast_models: list[tf.keras.Model]):
         """
@@ -33,9 +33,7 @@ class PPC:
             self.trainable_weights += forecast_model.trainable_weights
 
     def train(self, dataset: tf.data.Dataset, val_dataset: tf.data.Dataset, forecast_loss_func: Callable, reconstruction_loss_func: Callable, lambda_loss: float, optimizer: tf.keras.optimizers.Optimizer, callbacks: Optional[List[Callable]]=None, iterations: Optional[int]=None, loss_window: int=100):
-        """Train the models, alternating a train step and a validation step per iteration
-
-        Training stops after `iterations` iterations, or earlier when a callback returns False.
+        """Train the models with a train step and a validation step per iteration, until `iterations` or a callback stops training
 
         Args:
             dataset (tf.data.Dataset): train dataset, yielding (past samples [B, Np, ...], future samples [B, Nf, ...])
@@ -44,7 +42,7 @@ class PPC:
             reconstruction_loss_func (Callable): reconstruction loss, e.g. losses.MeanSquaredError
             lambda_loss (float): weight of the reconstruction loss in the total loss
             optimizer (tf.keras.optimizers.Optimizer): optimizer
-            callbacks (Optional[List[Callable]], optional): called every iteration with the train and validation losses as keyword arguments; returning False stops training. Defaults to None.
+            callbacks (Optional[List[Callable]], optional): called every iteration with the train losses and the moving-average validation losses as keyword arguments; returning False stops training. Defaults to None.
             iterations (Optional[int], optional): number of iterations to train; None trains until a callback stops training. Defaults to None.
             loss_window (int, optional): number of iterations in the moving average of the printed losses. Defaults to 100.
         """
@@ -110,9 +108,9 @@ class PPC:
                         forecast_loss           = forecast_loss,
                         reconstruction_loss     = reconstruction_loss,
                         total_loss              = total_loss,
-                        val_forecast_loss       = val_forecast_loss,
-                        val_reconstruction_loss = val_reconstruction_loss,
-                        val_total_loss          = val_total_loss,
+                        val_forecast_loss       = np.nanmean(val_losses['forecast_loss']),
+                        val_reconstruction_loss = np.nanmean(val_losses['reconstruction_loss']),
+                        val_total_loss          = np.nanmean(val_losses['total_loss']),
                     )
 
                     if result is False:
@@ -140,7 +138,6 @@ class PPC:
             Tuple[float, float, float]: forecast loss, reconstruction loss and total loss
         """
 
-        # The models are called with training=True, so layers such as BatchNormalization use batch statistics and update their moving averages
         with tf.GradientTape() as tape:
 
             # Determine encodings for past and positive/negative future samples
@@ -210,7 +207,7 @@ class PPC:
         return float(forecast_loss.numpy()), float(reconstruction_loss.numpy()), float(total_loss.numpy())
 
 class PCPC:
-    """Trainer for Probabilistic Contrastive Predictive Coding: no decoder, the forecast distribution is trained contrastively against negative samples"""
+    """Trainer for PCPC: encoder, autoregressive and forecast models, trained contrastively against negative samples"""
 
     def __init__(self, encoder_model: tf.keras.Model, ar_model: tf.keras.Model, forecast_models: list[tf.keras.Model]):
         """
@@ -236,16 +233,14 @@ class PCPC:
             self.trainable_weights += forecast_model.trainable_weights
 
     def train(self, dataset: tf.data.Dataset, val_dataset: tf.data.Dataset, forecast_loss_func: Callable, optimizer: tf.keras.optimizers.Optimizer, callbacks: Optional[List[Callable]]=None, iterations: Optional[int]=None, loss_window: int=100):
-        """Train the models, alternating a train step and a validation step per iteration
-
-        Training stops after `iterations` iterations, or earlier when a callback returns False.
+        """Train the models with a train step and a validation step per iteration, until `iterations` or a callback stops training
 
         Args:
             dataset (tf.data.Dataset): train dataset, yielding (past samples [B, Np, ...], positive future samples [B, Nf, ...], negative future samples [B, Nchi, Nf, ...])
             val_dataset (tf.data.Dataset): validation dataset, yielding batches like `dataset`
             forecast_loss_func (Callable): contrastive forecast loss, e.g. losses.ContrastiveNLLRLoss
             optimizer (tf.keras.optimizers.Optimizer): optimizer
-            callbacks (Optional[List[Callable]], optional): called every iteration with the train and validation losses as keyword arguments; returning False stops training. Defaults to None.
+            callbacks (Optional[List[Callable]], optional): called every iteration with the train losses and the moving-average validation losses as keyword arguments; returning False stops training. Defaults to None.
             iterations (Optional[int], optional): number of iterations to train; None trains until a callback stops training. Defaults to None.
             loss_window (int, optional): number of iterations in the moving average of the printed losses. Defaults to 100.
         """
@@ -292,7 +287,7 @@ class PCPC:
                 for callback in callbacks:
                     result = callback(
                         forecast_loss     = forecast_loss,
-                        val_forecast_loss = val_forecast_loss,
+                        val_forecast_loss = np.nanmean(val_losses['forecast_loss']),
                     )
 
                     if result is False:
@@ -319,7 +314,6 @@ class PCPC:
             float: forecast loss
         """
 
-        # The models are called with training=True, so layers such as BatchNormalization use batch statistics and update their moving averages
         with tf.GradientTape() as tape:
 
             # Determine encodings for past and positive/negative future samples

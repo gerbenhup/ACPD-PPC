@@ -42,6 +42,8 @@ if __name__ == '__main__':
             normal_b               = 2.0,
             iteration              = iteration,
             learning_rate          = 1e-4,
+            warmup_iterations      = 1000,
+            patience               = 5000,
         )
 
         print(settings)
@@ -49,8 +51,8 @@ if __name__ == '__main__':
         # Select save directory
         save_dir = Path(__file__).parent.resolve() / 'models/lambda-{}/{}'.format(settings.lambda_loss, hash(settings))
 
-        # If the model does not exist, create and train it. Otherwise, load it
-        if not save_dir.exists():
+        # Train the model if it has not been trained yet
+        if not (save_dir / 'settings.json').exists():
 
             save_dir.mkdir(parents=True, exist_ok=True)
             
@@ -120,7 +122,7 @@ if __name__ == '__main__':
                 reconstruction_loss_func = PPC.losses.MeanSquaredError(),
                 lambda_loss              = settings.lambda_loss,
                 optimizer                = tf.keras.optimizers.RMSprop(learning_rate=settings.learning_rate),
-                iterations               = 1000,
+                iterations               = settings.warmup_iterations,
                 callbacks                = [PPC.callbacks.TerminateOnNaN(), partracker]
             )
             
@@ -133,7 +135,7 @@ if __name__ == '__main__':
                 optimizer                = tf.keras.optimizers.RMSprop(learning_rate=settings.learning_rate),
                 callbacks                = [
                     PPC.callbacks.TerminateOnNaN(), 
-                    PPC.callbacks.RestoreOnEarlyStopping('val_total_loss', patience=5000, models=[encoder_model, decoder_model, ar_model] + forecast_models), 
+                    PPC.callbacks.RestoreOnEarlyStopping('val_total_loss', patience=settings.patience, models=[encoder_model, decoder_model, ar_model] + forecast_models), 
                     partracker,
                 ],
             )

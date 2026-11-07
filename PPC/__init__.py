@@ -1,5 +1,5 @@
 #########
-## Anomaly Detection Using Probabilistic Predictive Coding
+## Anomalous Change Point Detection Using Probabilistic Predictive Coding
 ## Roelof G. Hup, 10 November 2023
 ## Eindhoven University of Technology
 #########
@@ -12,6 +12,5 @@ from . import dimension
 from . import probability
 from . import wrappers
 from . import weights
-from . import math
 from . import tools
 from . import gpu

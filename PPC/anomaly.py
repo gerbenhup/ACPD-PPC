@@ -25,8 +25,7 @@ class Anomaly:
     def __call__(self, samples: tf.Tensor) -> tf.Tensor:
         """Compute the tail probability (probability of conformance) of every segment of the given sequences
 
-        Every window of Np segments is encoded and forecasts the next Nf segments. Segment t is then scored by
-        forecast model f using the window that ends at segment t-f-1.
+        Forecast model f scores segment t using the Np segments up to segment t-f-1.
 
         Args:
             samples (tf.Tensor): sequences of Ns segments, shape [B, Ns, ...]

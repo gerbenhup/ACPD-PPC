@@ -1,0 +1,20 @@
+[build-system]
+requires      = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name            = "ppc"
+version         = "1.0.0"
+description     = "Anomalous Change Point Detection Using Probabilistic Predictive Coding"
+readme          = "README.md"
+license         = {file = "LICENSE"}
+authors         = [{name = "Roelof G. Hup"}]
+# Exactly Python 3.9: saved models contain Lambda layers serialized as Python 3.9 bytecode
+requires-python = "==3.9.*"
+dynamic         = ["dependencies"]
+
+[tool.setuptools]
+packages = ["PPC"]
+
+[tool.setuptools.dynamic]
+dependencies = {file = ["requirements.txt"]}

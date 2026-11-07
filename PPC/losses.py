@@ -57,7 +57,7 @@ class MaximumLogLikelihoodLoss:
         """
         Args:
             omega (tf.Tensor): weights of the losses of the Nf future steps, shape [Nf], e.g. weights.uniform(Nf)
-            warmup (bool): whether to ignore the predicted standard deviations/scales and assume unit ones (True), as used during warm-up, or not (False)
+            warmup (bool): whether to assume unit standard deviations/scales (True, warm-up) or use the predicted ones (False)
             distribution (str, optional): distribution of the forecasted encodings, 'Gaussian' or 'Laplace'. Defaults to 'Gaussian'.
         """
 
@@ -96,18 +96,15 @@ class MaximumLogLikelihoodLoss:
         return weighted_loss
 
 class ContrastiveNLLRLoss:
-    """Contrastive negative log-likelihood ratio forecast loss, used by the PCPC trainer
-
-    The loss is log(mean likelihood of the negative samples) - log(likelihood of the positive sample),
-    averaged over the batch. The mean over the negative samples is computed in log space with
-    log-sum-exp, so it neither underflows nor overflows for high-dimensional encodings.
+    """Contrastive negative log-likelihood ratio forecast loss (PCPC): the log of the mean likelihood of the
+    negative samples minus the log-likelihood of the positive sample, computed with log-sum-exp
     """
 
     def __init__(self, omega: tf.Tensor, warmup: bool):
         """
         Args:
             omega (tf.Tensor): weights of the losses of the Nf future steps, shape [Nf], e.g. weights.uniform(Nf)
-            warmup (bool): whether to ignore the predicted standard deviations and assume unit ones (True), as used during warm-up, or not (False)
+            warmup (bool): whether to assume unit standard deviations (True, warm-up) or use the predicted ones (False)
         """
 
         self.omega  = omega
@@ -134,7 +131,7 @@ class ContrastiveNLLRLoss:
         encodings_future_neg = tf.transpose(encodings_future_neg, (1, 0, 2, 3)) # [Nchi, B, Nf, Ne]
         log_neg              = tf.map_fn(lambda x: self.loss_func(x, encodings_future_pred), encodings_future_neg) # [Nchi, B, Nf]
 
-        # Determine logarithm of the mean likelihood of the negative samples: log(mean(exp(log_neg))) = logsumexp(log_neg) - log(Nchi)
+        # Determine logarithm of the mean likelihood of the negative samples, with log-sum-exp
         Nchi         = tf.cast(tf.shape(log_neg)[0], log_neg.dtype)
         log_mean_neg = tf.math.reduce_logsumexp(log_neg, axis=0) - tf.math.log(Nchi) # [B, Nf]
 

@@ -8,9 +8,7 @@ import numpy as np
 
 if  __name__ == '__main__':
 
-    # Seed all random number generators. TensorFlow operations are not made deterministic here
-    # (tf.config.experimental.enable_op_determinism), because the gradient of the decoder's
-    # UpSampling2D has no deterministic GPU implementation, so reruns on a GPU can differ slightly.
+    # Seed all random number generators (operations are not made deterministic: UpSampling2D has no deterministic GPU implementation)
     np.random.seed(0)
     tf.keras.utils.set_random_seed(0)
 
@@ -40,6 +38,9 @@ if  __name__ == '__main__':
         encoder_filters      = encoder_filters,
         forecast_dense_units = forecast_dense_units,
         lambda_loss          = lambda_loss,
+        learning_rate        = 1e-4,
+        warmup_iterations    = 1000,
+        patience             = 10000,
     )
 
     print(settings)
@@ -47,8 +48,8 @@ if  __name__ == '__main__':
     # Select save directory
     save_dir = Path(__file__).parent.resolve() / 'models/{}'.format(hash(settings))
 
-    # If the model does not exist, create and train it. Otherwise, load it
-    if not save_dir.exists():
+    # Train the model if it has not been trained yet
+    if not (save_dir / 'settings.json').exists():
 
         save_dir.mkdir(parents=True, exist_ok=True)
         
@@ -124,8 +125,8 @@ if  __name__ == '__main__':
             forecast_loss_func       = PPC.losses.MaximumLogLikelihoodLoss(PPC.weights.uniform(settings.Nf), warmup=True),
             reconstruction_loss_func = PPC.losses.MeanSquaredError(),
             lambda_loss              = settings.lambda_loss,
-            optimizer                = tf.keras.optimizers.RMSprop(learning_rate=1e-4),
-            iterations               = 1000,
+            optimizer                = tf.keras.optimizers.RMSprop(learning_rate=settings.learning_rate),
+            iterations               = settings.warmup_iterations,
             callbacks                = [
                 PPC.callbacks.TerminateOnNaN(),
                 monitor_callback,
@@ -138,10 +139,10 @@ if  __name__ == '__main__':
             forecast_loss_func       = PPC.losses.MaximumLogLikelihoodLoss(PPC.weights.uniform(settings.Nf), warmup=False),
             reconstruction_loss_func = PPC.losses.MeanSquaredError(),
             lambda_loss              = settings.lambda_loss,
-            optimizer                = tf.keras.optimizers.RMSprop(learning_rate=1e-4),
+            optimizer                = tf.keras.optimizers.RMSprop(learning_rate=settings.learning_rate),
             callbacks                = [
                 PPC.callbacks.TerminateOnNaN(), 
-                PPC.callbacks.RestoreOnEarlyStopping(monitor='val_forecast_loss', patience=10000, models=[encoder_model, decoder_model, ar_model] + forecast_models),
+                PPC.callbacks.RestoreOnEarlyStopping(monitor='val_forecast_loss', patience=settings.patience, models=[encoder_model, decoder_model, ar_model] + forecast_models),
                 monitor_callback,
             ],
         )

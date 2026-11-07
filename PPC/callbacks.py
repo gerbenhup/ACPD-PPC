@@ -141,7 +141,7 @@ class EarlyStopping:
             return False
 
 class TerminateOnNaN:
-    """Training callback that stops training as soon as any reported loss becomes NaN"""
+    """Training callback that aborts training as soon as any reported loss becomes NaN, so no NaN model gets saved"""
 
     def __init__(self):
         pass
@@ -153,13 +153,15 @@ class TerminateOnNaN:
             **kwargs: named loss values for the current iteration
 
         Returns:
-            bool: False if any loss is NaN (interrupts training), True otherwise
+            bool: True if no loss is NaN
+
+        Raises:
+            FloatingPointError: if any loss is NaN
         """
 
         for name, value in kwargs.items():
             if np.any(np.isnan(value)):
                 print()
-                print('Terminate on NaN triggered by {}'.format(name))
-                return False
+                raise FloatingPointError('Terminate on NaN triggered by {}'.format(name))
 
         return True

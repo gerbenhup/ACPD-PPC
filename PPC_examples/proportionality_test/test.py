@@ -74,7 +74,11 @@ if __name__ == '__main__':
             EDF_pred[:, i]  = np.array(PPC.probability.gaussian_exp_norm_log_likelihood(encodings_future_true, encodings_future_pred)[:, 0])
             EDF_pred[:, i] /= scipy.integrate.trapezoid(EDF_pred[:, i], grid)
 
-            mu_pred, sigma_pred, mae = tools.functions.fit_gaussian(grid, EDF_pred[:, i])
+            # Fit a Gaussian; failed fits are left out of the statistics
+            try:
+                mu_pred, sigma_pred, mae = tools.functions.fit_gaussian(grid, EDF_pred[:, i])
+            except RuntimeError:
+                mu_pred, sigma_pred, mae = np.nan, np.nan, np.nan
 
             metrics[save_dir.stem].extend([mu_true, mu_pred, sigma_true, sigma_pred, mae])
 
@@ -111,8 +115,8 @@ if __name__ == '__main__':
         print()
 
     metrics_array = np.array(list(metrics.values()))
-    metrics_means = np.mean(metrics_array, axis=0)
-    metrics_stds  = np.std(metrics_array, axis=0)
+    metrics_means = np.nanmean(metrics_array, axis=0)
+    metrics_stds  = np.nanstd(metrics_array, axis=0)
 
     for mean, std in zip(metrics_means, metrics_stds):
         print('{:.2f} ± {:.2f}\t'.format(mean, std), end='')

@@ -49,7 +49,7 @@ def time_stacked(modules: list[tf.keras.layers.Layer], inputs_concat: list[bool]
     for j in range(len(modules)):
         for i, (input_, concat) in enumerate(zip(new_inputs, inputs_concat)):
             if concat is True:
-                inputs_per_module[j].append(tf.keras.layers.Lambda(lambda x: x[:, j])(input_))
+                inputs_per_module[j].append(tf.keras.layers.Lambda(lambda x, j=j: x[:, j])(input_))
             else:
                 inputs_per_module[j].append(input_)
 

@@ -79,7 +79,8 @@ class models:
 
         outputs_means = tf.keras.layers.Dense(Ne, activation='linear')(x)
         outputs_stds  = tf.keras.layers.Dense(Ne, activation='linear')(x)
-        outputs_stds  = tf.keras.layers.Lambda(lambda y: PPC.math.exp(y), name='Exponential')(outputs_stds)
+        # Standard deviations, with clipped log standard deviations to avoid underflow and overflow
+        outputs_stds  = tf.keras.layers.Lambda(lambda y: tf.math.exp(tf.clip_by_value(y, -20.0, 88.0)), name='Exponential')(outputs_stds)
 
         outputs = tf.keras.layers.Lambda(lambda x: tf.stack(x, axis=-1), name='Stack1D')([outputs_means, outputs_stds])
 
@@ -93,8 +94,7 @@ class augmentation:
     def mnist_augmentation() -> Tuple[tf.keras.Model, tf.keras.Model, tf.keras.Model]:
         """Create the past/positive future/negative future augmentation models used to perturb MNIST digit sequences during training
 
-        Past samples are augmented more mildly (rotation/zoom/translation factor 0.05) than future
-        samples (factor 0.1), so the model cannot trivially match past and future images pixel-for-pixel.
+        Past samples are augmented less (rotation/zoom/translation factor 0.05) than future samples (factor 0.1).
 
         Returns:
             Tuple[tf.keras.Model, tf.keras.Model, tf.keras.Model]: augmentation models for past, positive future and negative future samples
@@ -249,7 +249,7 @@ class data:
                 Nf (int): number of future samples per sequence
                 Nchi (int): number of negative samples per future sample
                 augmentation (Optional[tf.keras.Model], optional): (past, positive future, negative future) augmentation models, as returned by augmentation.mnist_augmentation. Defaults to None.
-                seed (int, optional): seed of this dataset's own random number generator, used to draw the sequences. Defaults to 0.
+                seed (int, optional): seed for drawing the sequences. Defaults to 0.
             """
 
             # Input arguments
@@ -263,27 +263,28 @@ class data:
             self.image_shape = self.MNIST_inst.shape
             self.dataset     = self.MNIST_inst.dataset_per_label
 
-            # Own random number generator, so the drawn sequences do not depend on other users of np.random
-            self.rng = np.random.RandomState(seed)
+            # Random number generator seed and number of passes over the dataset
+            self.seed       = seed
+            self.num_passes = 0
 
-        def prepare_samples(self, *args, **kwargs) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        def prepare_samples(self, rng: np.random.RandomState) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
             """Sample one sequence of successive digits starting at a random digit, with negative samples of other digits
 
             Args:
-                *args, **kwargs: unused, present so this method can be passed to `map()` over a dummy iterable
+                rng (np.random.RandomState): random number generator to draw with
 
             Returns:
                 Tuple[np.ndarray, np.ndarray, np.ndarray]: past samples [Np, 28, 28, 1], positive future samples [Nf, 28, 28, 1] and negative future samples [Nchi, Nf, 28, 28, 1]
             """
 
-            start         = self.rng.randint(0, 10)
+            start         = rng.randint(0, 10)
             labels_past   = np.mod(np.arange(start, start + self.Np), 10)
             labels_future = np.mod(np.arange(start + self.Np, start + self.Np + self.Nf), 10)
 
             samples_past = []
 
             for label_past in labels_past:
-                samples_past.append(self.dataset[label_past][self.rng.choice(self.dataset[label_past].shape[0])])
+                samples_past.append(self.dataset[label_past][rng.choice(self.dataset[label_past].shape[0])])
 
             samples_past = np.stack(samples_past, axis=0)
             samples_past = np.expand_dims(samples_past, axis=-1)
@@ -291,7 +292,7 @@ class data:
             samples_future_pos = []
 
             for label_future in labels_future:
-                samples_future_pos.append(self.dataset[label_future][self.rng.choice(self.dataset[label_future].shape[0])])
+                samples_future_pos.append(self.dataset[label_future][rng.choice(self.dataset[label_future].shape[0])])
 
             samples_future_pos = np.stack(samples_future_pos, axis=0)
             samples_future_pos = np.expand_dims(samples_future_pos, axis=-1)
@@ -302,10 +303,10 @@ class data:
                 samples_future_neg.append([])
                 for label_future in labels_future:
                     while True:
-                        label_prop = self.rng.randint(0, 10)
+                        label_prop = rng.randint(0, 10)
                         if label_prop != label_future:
                             break
-                    samples_future_neg[-1].append(self.dataset[label_prop][self.rng.choice(self.dataset[label_prop].shape[0])])
+                    samples_future_neg[-1].append(self.dataset[label_prop][rng.choice(self.dataset[label_prop].shape[0])])
                 samples_future_neg[-1] = np.stack(samples_future_neg[-1], axis=0)
 
             samples_future_neg = np.stack(samples_future_neg, axis=0)
@@ -320,6 +321,10 @@ class data:
                 Tuple[np.ndarray, np.ndarray, np.ndarray]: batches of past, positive future and negative future samples
             """
 
+            # New random number generator for every pass over the dataset
+            rng = np.random.RandomState([self.seed, self.num_passes])
+            self.num_passes += 1
+
             while True:
 
                 # Allocate lists for samples
@@ -328,7 +333,7 @@ class data:
                 batch_samples_future_neg = [None for _ in range(self.batch_size)]
 
                 # Prepare samples with appropriate map function
-                for i, (samples_past, samples_future_pos, samples_future_neg) in enumerate(map(self.prepare_samples, [None]*self.batch_size)):
+                for i, (samples_past, samples_future_pos, samples_future_neg) in enumerate(map(self.prepare_samples, [rng]*self.batch_size)):
                     batch_samples_past[i], batch_samples_future_pos[i], batch_samples_future_neg[i] = samples_past, samples_future_pos, samples_future_neg
 
                 # Stack samples in batches

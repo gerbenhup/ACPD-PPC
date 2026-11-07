@@ -7,7 +7,6 @@ import numpy as np
 import matplotlib.pyplot as plt
 import tensorflow as tf
 import sklearn.metrics
-import scipy.optimize
 
 if  __name__ == '__main__':
 
@@ -36,7 +35,8 @@ if  __name__ == '__main__':
 
     t = np.arange(0, test_GridSamples_inst.flat_data.shape[1]/test_GridSamples_inst.fs, 1/test_GridSamples_inst.fs)
 
-    for save_dir in sorted(models_dir.iterdir()):
+    # Loop through all trained models
+    for save_dir in sorted(p.parent for p in models_dir.glob('*/settings.json')):
 
         print(save_dir.stem)
 
@@ -96,7 +96,7 @@ if  __name__ == '__main__':
         loglikelihoods_agg = np.array(tf.math.reduce_mean(loglikelihoods_res, axis=1))
         probabilities_agg  = np.array(tf.math.reduce_mean(probabilities_res, axis=1))
 
-        # Matrices indexed [past frequency, future frequency], transposed so the past frequency is on the x-axis
+        # Transpose, so the past frequency is on the x-axis
         loglikelihoods_mat = np.reshape(loglikelihoods_agg, (test_GridSamples_inst.gridsize, test_GridSamples_inst.gridsize)).T
         probabilities_mat  = np.reshape(probabilities_agg, (test_GridSamples_inst.gridsize, test_GridSamples_inst.gridsize)).T
 
@@ -131,11 +131,11 @@ if  __name__ == '__main__':
         plt.close()
 
         # Generate encodings for the labelled val/test anomaly-detection sets
-        val_encodings_past  = encoder_model_td1.predict(val_data_inst.samples[:, :5, :, :], batch_size=settings.batch_size, verbose=1)
-        test_encodings_past = encoder_model_td1.predict(test_data_inst.samples[:, :5, :, :], batch_size=settings.batch_size, verbose=1)
+        val_encodings_past  = encoder_model_td1.predict(val_data_inst.samples[:, :test_GridSamples_inst.Np, :, :], batch_size=settings.batch_size, verbose=1)
+        test_encodings_past = encoder_model_td1.predict(test_data_inst.samples[:, :test_GridSamples_inst.Np, :, :], batch_size=settings.batch_size, verbose=1)
 
-        val_encodings_future_true  = encoder_model_td1.predict(val_data_inst.samples[:, 5:, :, :], batch_size=settings.batch_size, verbose=1)
-        test_encodings_future_true = encoder_model_td1.predict(test_data_inst.samples[:, 5:, :, :], batch_size=settings.batch_size, verbose=1)
+        val_encodings_future_true  = encoder_model_td1.predict(val_data_inst.samples[:, test_GridSamples_inst.Np:, :, :], batch_size=settings.batch_size, verbose=1)
+        test_encodings_future_true = encoder_model_td1.predict(test_data_inst.samples[:, test_GridSamples_inst.Np:, :, :], batch_size=settings.batch_size, verbose=1)
 
         val_context_past  = ar_model.predict(val_encodings_past, batch_size=settings.batch_size, verbose=1)[:, -1, :]
         test_context_past = ar_model.predict(test_encodings_past, batch_size=settings.batch_size, verbose=1)[:, -1, :]
@@ -149,14 +149,12 @@ if  __name__ == '__main__':
         val_encodings_future_pred  = val_encodings_future_pred[:, 0, :]
         test_encodings_future_pred = test_encodings_future_pred[:, 0, :]
 
-        val_probabilities  = PPC.probability.multivariate_gaussian_tail_probability(val_encodings_future_true, val_encodings_future_pred)
-        test_probabilities = PPC.probability.multivariate_gaussian_tail_probability(test_encodings_future_true, test_encodings_future_pred)
-
         val_y_true  = val_data_inst.anomaly_labels.astype(bool)
         test_y_true = test_data_inst.anomaly_labels.astype(bool)
 
-        val_y_pred  = 1 - val_probabilities
-        test_y_pred = 1 - test_probabilities
+        # Anomaly score: squared Mahalanobis distance (unlike the tail probability, it does not saturate)
+        val_y_pred  = np.array(PPC.probability.squared_mahalanobis_distance(val_encodings_future_true, val_encodings_future_pred))
+        test_y_pred = np.array(PPC.probability.squared_mahalanobis_distance(test_encodings_future_true, test_encodings_future_pred))
 
         # Figure: ROC + PRC curves on the test set
         roc_fpr, roc_tpr, _          = sklearn.metrics.roc_curve(y_true=test_y_true, y_score=test_y_pred)
@@ -197,25 +195,9 @@ if  __name__ == '__main__':
         print(f'PRC AUC: {prc_auc}')
 
         # Find the decision threshold that maximizes F1 on the validation set
-        def func(threshold):
-
-            y_pred_binary = val_y_pred >= float(threshold)
-
-            TP = np.sum(np.logical_and(val_y_true, y_pred_binary))
-            FP = np.sum(np.logical_and(~val_y_true, y_pred_binary))
-            FN = np.sum(np.logical_and(val_y_true, ~y_pred_binary))
-
-            f1_score = (2*TP)/(2*TP+FP+FN)
-
-            return -f1_score
-
-        res = scipy.optimize.differential_evolution(
-            func   = func,
-            bounds = [(0., 1.)],
-            seed   = 0,
-        )
-
-        best_threshold = res.x
+        val_precision, val_recall, val_thresholds = sklearn.metrics.precision_recall_curve(y_true=val_y_true, probas_pred=val_y_pred)
+        val_f1_scores  = 2*val_precision[:-1]*val_recall[:-1] / np.maximum(val_precision[:-1] + val_recall[:-1], 1e-12)
+        best_threshold = val_thresholds[np.argmax(val_f1_scores)]
 
         print(f'best_threshold: {best_threshold}')
 

@@ -1,18 +1,18 @@
-"""Likelihoods, distances and tail probabilities of encodings under the predicted forecast distributions.
+"""Likelihoods, distances and tail probabilities of encodings under the predicted distributions.
 
-The forecast distributions are diagonal: every encoding dimension has its own independent Gaussian (or
-Laplace) distribution. They are stored as tensors of shape [..., Ne, 2], where channel 0 holds the means
-(locations) and channel 1 the standard deviations (scales).
+Predicted distributions have shape [..., Ne, 2]: the means (locations) and standard deviations (scales)
+of independent distributions per encoding dimension.
 """
 
 import numpy as np
 import tensorflow as tf
 import tensorflow_probability as tfp
 
-from . import math
+# Lower bound on the standard deviations (scales), for numerical stability
+MIN_SCALE = 1e-9
 
 def gaussian_likelihood(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) -> tf.Tensor:
-    """Gaussian likelihood of the true encodings, i.e. the product of the densities over the encoding dimensions
+    """Gaussian likelihood of the true encodings, computed as the exponent of the log-likelihood
 
     Args:
         encodings_true (tf.Tensor): true encodings, shape [..., Ne]
@@ -22,10 +22,10 @@ def gaussian_likelihood(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) ->
         tf.Tensor: likelihood, shape [...]
     """
 
-    return tf.math.reduce_prod((1/(math.sqrt(2*np.pi)*encodings_pred[..., 1]))*math.exp(-tf.math.square(encodings_true - encodings_pred[..., 0])/(2*math.square(encodings_pred[..., 1]))), axis=-1)
+    return tf.math.exp(gaussian_log_likelihood(encodings_true, encodings_pred))
 
 def gaussian_likelihood_unit_variance(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) -> tf.Tensor:
-    """Gaussian likelihood of the true encodings, ignoring the predicted standard deviations (unit variance)
+    """Gaussian likelihood of the true encodings with unit variance, computed as the exponent of the log-likelihood
 
     Args:
         encodings_true (tf.Tensor): true encodings, shape [..., Ne]
@@ -35,7 +35,7 @@ def gaussian_likelihood_unit_variance(encodings_true: tf.Tensor, encodings_pred:
         tf.Tensor: likelihood, shape [...]
     """
 
-    return tf.math.reduce_prod((1/(math.sqrt(2*np.pi)))*math.exp(-tf.math.square(encodings_true - encodings_pred[..., 0])/2), axis=-1)
+    return tf.math.exp(gaussian_log_likelihood_unit_variance(encodings_true, encodings_pred))
 
 def gaussian_log_likelihood(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) -> tf.Tensor:
     """Gaussian log-likelihood of the true encodings, summed over the encoding dimensions
@@ -48,12 +48,12 @@ def gaussian_log_likelihood(encodings_true: tf.Tensor, encodings_pred: tf.Tensor
         tf.Tensor: log-likelihood, shape [...]
     """
 
-    return -encodings_pred.shape[-2]*math.log(tf.math.sqrt(2*np.pi)) - tf.math.reduce_sum(math.log(encodings_pred[..., 1]), axis=-1) - 1/2 * tf.math.reduce_sum(math.square(encodings_true - encodings_pred[..., 0]) / math.square(encodings_pred[..., 1]), axis=-1)
+    stds = tf.math.maximum(encodings_pred[..., 1], MIN_SCALE)
+
+    return -encodings_pred.shape[-2]*tf.math.log(tf.math.sqrt(2*np.pi)) - tf.math.reduce_sum(tf.math.log(stds), axis=-1) - 1/2 * tf.math.reduce_sum(tf.math.square(encodings_true - encodings_pred[..., 0]) / tf.math.square(stds), axis=-1)
 
 def gaussian_log_likelihood_unit_variance(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) -> tf.Tensor:
-    """Gaussian log-likelihood of the true encodings, ignoring the predicted standard deviations (unit variance)
-
-    Used during the warm-up phase of training, before the standard deviations are learned.
+    """Gaussian log-likelihood of the true encodings with unit variance (used during warm-up)
 
     Args:
         encodings_true (tf.Tensor): true encodings, shape [..., Ne]
@@ -63,13 +63,10 @@ def gaussian_log_likelihood_unit_variance(encodings_true: tf.Tensor, encodings_p
         tf.Tensor: log-likelihood, shape [...]
     """
 
-    return -encodings_pred.shape[-2]*math.log(tf.math.sqrt(2*np.pi)) - 1/2 * tf.math.reduce_sum(math.square(encodings_true - encodings_pred[..., 0]), axis=-1)
+    return -encodings_pred.shape[-2]*tf.math.log(tf.math.sqrt(2*np.pi)) - 1/2 * tf.math.reduce_sum(tf.math.square(encodings_true - encodings_pred[..., 0]), axis=-1)
 
 def gaussian_exp_norm_log_likelihood(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) -> tf.Tensor:
-    """Gaussian likelihood relative to its maximum over all inputs, computed in log space for numerical stability
-
-    The log-likelihoods are shifted so that their maximum is 0 before taking the exponent, so the result
-    lies in (0, 1]. Useful for plotting the shape of a predicted density, which is normalized afterwards.
+    """Gaussian likelihood divided by its maximum over all inputs, computed in log space (used to plot densities)
 
     Args:
         encodings_true (tf.Tensor): true encodings, shape [..., Ne]
@@ -81,7 +78,7 @@ def gaussian_exp_norm_log_likelihood(encodings_true: tf.Tensor, encodings_pred: 
 
     loglikelihood  = gaussian_log_likelihood(encodings_true, encodings_pred)
     loglikelihood -= tf.math.reduce_max(loglikelihood)
-    likelihood     = math.exp(loglikelihood)
+    likelihood     = tf.math.exp(loglikelihood)
 
     return likelihood
 
@@ -96,12 +93,12 @@ def laplace_log_likelihood(encodings_true: tf.Tensor, encodings_pred: tf.Tensor)
         tf.Tensor: log-likelihood, shape [...]
     """
 
-    return -encodings_pred.shape[-2]*math.log(2.0) - tf.math.reduce_sum(math.log(encodings_pred[..., 1]), axis=-1) - tf.math.reduce_sum(math.abs(encodings_true - encodings_pred[..., 0]) / encodings_pred[..., 1], axis=-1)
+    scales = tf.math.maximum(encodings_pred[..., 1], MIN_SCALE)
+
+    return -encodings_pred.shape[-2]*tf.math.log(2.0) - tf.math.reduce_sum(tf.math.log(scales), axis=-1) - tf.math.reduce_sum(tf.math.abs(encodings_true - encodings_pred[..., 0]) / scales, axis=-1)
 
 def laplace_log_likelihood_unit_scale(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) -> tf.Tensor:
-    """Laplace log-likelihood of the true encodings, ignoring the predicted scales (unit scale)
-
-    Used during the warm-up phase of training, before the scales are learned.
+    """Laplace log-likelihood of the true encodings with unit scale (used during warm-up)
 
     Args:
         encodings_true (tf.Tensor): true encodings, shape [..., Ne]
@@ -111,12 +108,10 @@ def laplace_log_likelihood_unit_scale(encodings_true: tf.Tensor, encodings_pred:
         tf.Tensor: log-likelihood, shape [...]
     """
 
-    return -encodings_pred.shape[-2]*math.log(2.0) - tf.math.reduce_sum(math.abs(encodings_true - encodings_pred[..., 0]), axis=-1)
+    return -encodings_pred.shape[-2]*tf.math.log(2.0) - tf.math.reduce_sum(tf.math.abs(encodings_true - encodings_pred[..., 0]), axis=-1)
 
 def laplace_exp_norm_log_likelihood(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) -> tf.Tensor:
-    """Laplace likelihood relative to its maximum over all inputs, computed in log space for numerical stability
-
-    See `gaussian_exp_norm_log_likelihood`.
+    """Laplace likelihood divided by its maximum over all inputs, computed in log space (used to plot densities)
 
     Args:
         encodings_true (tf.Tensor): true encodings, shape [..., Ne]
@@ -128,7 +123,7 @@ def laplace_exp_norm_log_likelihood(encodings_true: tf.Tensor, encodings_pred: t
 
     loglikelihood  = laplace_log_likelihood(encodings_true, encodings_pred)
     loglikelihood -= tf.math.reduce_max(loglikelihood)
-    likelihood     = math.exp(loglikelihood)
+    likelihood     = tf.math.exp(loglikelihood)
 
     return likelihood
 
@@ -143,7 +138,7 @@ def mahalanobis_distance(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) -
         tf.Tensor: Mahalanobis distance, shape [...]
     """
 
-    return math.sqrt(tf.math.reduce_sum(math.square(encodings_true - encodings_pred[..., 0]) / math.square(encodings_pred[..., 1]), axis=-1))
+    return tf.math.sqrt(squared_mahalanobis_distance(encodings_true, encodings_pred))
 
 def squared_mahalanobis_distance(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) -> tf.Tensor:
     """Squared Mahalanobis distance of the true encodings to the predicted (diagonal) Gaussian distributions
@@ -156,7 +151,9 @@ def squared_mahalanobis_distance(encodings_true: tf.Tensor, encodings_pred: tf.T
         tf.Tensor: squared Mahalanobis distance, shape [...]
     """
 
-    return tf.math.reduce_sum(math.square(encodings_true - encodings_pred[..., 0]) / math.square(encodings_pred[..., 1]), axis=-1)
+    stds = tf.math.maximum(encodings_pred[..., 1], MIN_SCALE)
+
+    return tf.math.reduce_sum(tf.math.square(encodings_true - encodings_pred[..., 0]) / tf.math.square(stds), axis=-1)
 
 def chi_squared_cdf(x: tf.Tensor, df: int) -> tf.Tensor:
     """Cumulative distribution function of the chi-squared distribution
@@ -174,9 +171,8 @@ def chi_squared_cdf(x: tf.Tensor, df: int) -> tf.Tensor:
 def multivariate_gaussian_tail_probability(encodings_true: tf.Tensor, encodings_pred: tf.Tensor) -> tf.Tensor:
     """Tail probability (probability of conformance) of the true encodings under the predicted Gaussian distributions
 
-    The squared Mahalanobis distance of a sample from an Ne-dimensional Gaussian follows a chi-squared
-    distribution with Ne degrees of freedom. The tail probability is the probability of a sample lying
-    at least as far from the mean: 1 - CDF(squared distance). Low values indicate anomalies.
+    The squared Mahalanobis distance follows a chi-squared distribution with Ne degrees of freedom; the tail
+    probability is its survival function, computed in float64 so that small probabilities are not rounded to 0.
 
     Args:
         encodings_true (tf.Tensor): true encodings, shape [..., Ne]
@@ -189,8 +185,7 @@ def multivariate_gaussian_tail_probability(encodings_true: tf.Tensor, encodings_
     # Determine squared Mahalanobis distances
     dist = squared_mahalanobis_distance(encodings_true, encodings_pred)
 
-    # Determine associated CDF values for the Chi-squared distribution
-    cdf = chi_squared_cdf(dist, encodings_pred.shape[-2])
+    # Determine tail probabilities with the survival function of the Chi-squared distribution
+    tail_prob = tf.math.igammac(tf.constant(encodings_pred.shape[-2] / 2, tf.float64), tf.cast(dist, tf.float64) / 2)
 
-    # Convert to tail probability and return
-    return 1. - cdf
+    return tf.cast(tail_prob, dist.dtype)

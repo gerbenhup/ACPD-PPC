@@ -118,7 +118,8 @@ class models:
 
         outputs_means = tf.keras.layers.Dense(Ne, activation='linear')(x)
         outputs_stds  = tf.keras.layers.Dense(Ne, activation='linear')(x)
-        outputs_stds  = tf.keras.layers.Lambda(lambda y: PPC.math.exp(y), name='Exponential')(outputs_stds)
+        # Standard deviations, with clipped log standard deviations to avoid underflow and overflow
+        outputs_stds  = tf.keras.layers.Lambda(lambda y: tf.math.exp(tf.clip_by_value(y, -20.0, 88.0)), name='Exponential')(outputs_stds)
 
         outputs = tf.keras.layers.Lambda(lambda x: tf.stack(x, axis=-1), name='Stack1D')([outputs_means, outputs_stds])
 
@@ -286,11 +287,7 @@ class data:
         return t, signal, signal_reshaped
 
     class PositiveSampleHelper:
-        """Picklable callable that generates a single "positive" sample (no frequency change) for `Pool.imap`
-
-        Stores the signal-generation parameters (see `data.generate_signal`) and, on each call, draws a
-        random center frequency and generates a signal whose frequency stays the same across the change point.
-        """
+        """Picklable callable for `Pool.imap` that generates one sample without frequency change, at a random center frequency"""
 
         def __init__(
             self,
@@ -346,7 +343,7 @@ class data:
                 Tuple[np.ndarray, np.ndarray, np.ndarray]: see `data.generate_signal`
             """
 
-            # Seed per sample, so the dataset is reproducible regardless of which worker generates which sample
+            # Seed per sample, for reproducibility
             np.random.seed([self.seed, index])
 
             f_center_past   = np.random.uniform(self.fr[0]+0.5*self.fb, self.fr[1]-0.5*self.fb)
@@ -372,12 +369,7 @@ class data:
             )
 
     class GridSampleHelper:
-        """Picklable callable that generates a single sample for a given (past, future) center-frequency pair
-
-        Stores the signal-generation parameters (see `data.generate_signal`) and, on each call, generates a
-        signal whose past/future center frequencies are given explicitly, allowing a systematic sweep over
-        the frequency grid (used for both the grid-based test set and the labelled positive/negative sets).
-        """
+        """Picklable callable for `Pool.imap` that generates one sample for a given (past, future) center frequency pair"""
 
         def __init__(
             self,
@@ -435,7 +427,7 @@ class data:
 
             index, (f_center_past, f_center_future) = task
 
-            # Seed per sample, so the dataset is reproducible regardless of which worker generates which sample
+            # Seed per sample, for reproducibility
             np.random.seed([self.seed, index])
 
             return data.generate_signal(
@@ -458,12 +450,7 @@ class data:
             )
 
     class PositiveSamples:
-        """Collection of "positive" signal segments (no frequency change across the segment boundary)
-
-        Backed by an HDF5 file; used for training and validation, where every sample is a conforming
-        (non-anomalous) sequence. Use `PositiveSamples.create(...)` to generate a new HDF5 file, or the
-        constructor to load an existing one.
-        """
+        """Samples without frequency change (training and validation data), stored in an HDF5 file"""
 
         def __init__(self, path: Path):
             """Load a positive-samples collection from an existing HDF5 file
@@ -555,15 +542,16 @@ class data:
                 seed,
             )
 
-            collection = []
-            for _, _, signals_reshaped in tqdm(map_func(generator, range(size)), total=size):
-                collection.append(signals_reshaped)
-            collection = np.stack(collection, axis=0)
-
-            close_func()
-
             with h5py.File(path, 'w') as hf:
-                hf.create_dataset('collection', data=collection)
+
+                # Write samples to the file as they are generated
+                for i, (_, _, signals_reshaped) in enumerate(tqdm(map_func(generator, range(size)), total=size)):
+                    if i == 0:
+                        hf.create_dataset('collection', shape=(size,) + signals_reshaped.shape, dtype=signals_reshaped.dtype)
+                    hf['collection'][i] = signals_reshaped
+
+                close_func()
+
                 hf['collection'].attrs.create('Np', data=Np)
                 hf['collection'].attrs.create('Nf', data=Nf)
                 hf['collection'].attrs.create('L', data=L)
@@ -583,12 +571,7 @@ class data:
             return data.PositiveSamples(path)
 
     class PositiveNegativeSamples:
-        """Labelled collection of conforming ("positive") and frequency-changed ("negative") signal segments
-
-        Backed by an HDF5 file; used for anomaly-detection metric evaluation (ROC/PRC, threshold search).
-        Use `PositiveNegativeSamples.create(...)` to generate a new HDF5 file, or the constructor to load
-        an existing one.
-        """
+        """Samples without (positive) and with (negative) frequency change, for the detection metrics, stored in an HDF5 file"""
 
         def __init__(self, path: Path):
             """Load a labelled positive/negative samples collection from an existing HDF5 file
@@ -627,8 +610,7 @@ class data:
         ) -> 'data.PositiveNegativeSamples':
             """Generate `num_pos` positive and `num_pos` negative samples and save them to an HDF5 file
 
-            Positive samples share the same center frequency across the segment boundary; negative samples
-            have a different (randomly redrawn) center frequency after the boundary.
+            Negative samples have a different, randomly drawn center frequency after the change point.
 
             Args:
                 path (Path): HDF5 file to write
@@ -675,10 +657,13 @@ class data:
             fcs         = rng.uniform(fr[0]+0.5*fb, fr[1]-0.5*fb, num_pos)
             tasks       = np.stack([fcs, fcs], axis=1)
 
-            pos_samples = []
-            for _, _, signals_reshaped in tqdm(map_func(generator, enumerate(tasks)), total=len(tasks)):
-                pos_samples.append(signals_reshaped)
-            pos_samples = np.stack(pos_samples, axis=0)
+            # Write samples to the file as they are generated
+            hf = h5py.File(path, 'w')
+
+            for i, (_, _, signals_reshaped) in enumerate(tqdm(map_func(generator, enumerate(tasks)), total=len(tasks))):
+                if i == 0:
+                    hf.create_dataset('pos_samples', shape=(num_pos,) + signals_reshaped.shape, dtype=signals_reshaped.dtype)
+                hf['pos_samples'][i] = signals_reshaped
 
             # Generate negative samples
             fcs_past   = rng.uniform(fr[0]+0.5*fb, fr[1]-0.5*fb, num_pos)
@@ -693,26 +678,18 @@ class data:
 
             tasks = np.stack([fcs_past, fcs_future], axis=1)
 
-            neg_samples = []
-            for _, _, signals_reshaped in tqdm(map_func(generator, enumerate(tasks, start=num_pos)), total=len(tasks)):
-                neg_samples.append(signals_reshaped)
-            neg_samples = np.stack(neg_samples, axis=0)
+            for i, (_, _, signals_reshaped) in enumerate(tqdm(map_func(generator, enumerate(tasks, start=num_pos)), total=len(tasks))):
+                if i == 0:
+                    hf.create_dataset('neg_samples', shape=(num_pos,) + signals_reshaped.shape, dtype=signals_reshaped.dtype)
+                hf['neg_samples'][i] = signals_reshaped
 
             close_func()
-
-            with h5py.File(path, 'w') as hf:
-                hf.create_dataset('pos_samples', data=pos_samples)
-                hf.create_dataset('neg_samples', data=neg_samples)
+            hf.close()
 
             return data.PositiveNegativeSamples(path)
 
     class GridSamples:
-        """Collection of signal segments generated over a systematic grid of past/future center frequencies
-
-        Backed by an HDF5 file; used for the test-set log-likelihood/probability heatmap and example-signal
-        figures. Use `GridSamples.create(...)` to generate a new HDF5 file, or the constructor to load an
-        existing one.
-        """
+        """Samples on a grid of past/future center frequencies, for the test figures, stored in an HDF5 file"""
 
         def __init__(self, path: Path):
             """Load a grid-samples collection from an existing HDF5 file
@@ -773,8 +750,7 @@ class data:
         ) -> 'data.GridSamples':
             """Generate samples over a `gridsize` x `gridsize` grid of past/future center frequencies and save them
 
-            For each of the `gridsize**2` (past, future) frequency combinations, `iterations` independent
-            samples are generated (to average out noise/wander randomness at evaluation time).
+            `iterations` samples are generated for each of the `gridsize**2` frequency combinations.
 
             Args:
                 path (Path): HDF5 file to write
@@ -822,15 +798,16 @@ class data:
             grid_future = np.repeat(grid_future, iterations)
             tasks       = np.stack([grid_past, grid_future], axis=1)
 
-            collection = []
-            for _, _, signals_reshaped in tqdm(map_func(generator, enumerate(tasks)), total=len(tasks)):
-                collection.append(signals_reshaped)
-            collection = np.stack(collection, axis=0)
-
-            close_func()
-
             with h5py.File(path, 'w') as hf:
-                hf.create_dataset('collection', data=collection)
+
+                # Write samples to the file as they are generated
+                for i, (_, _, signals_reshaped) in enumerate(tqdm(map_func(generator, enumerate(tasks)), total=len(tasks))):
+                    if i == 0:
+                        hf.create_dataset('collection', shape=(len(tasks),) + signals_reshaped.shape, dtype=signals_reshaped.dtype)
+                    hf['collection'][i] = signals_reshaped
+
+                close_func()
+
                 hf['collection'].attrs.create('gridsize', data=gridsize)
                 hf['collection'].attrs.create('iterations', data=iterations)
                 hf['collection'].attrs.create('Np', data=Np)
@@ -859,13 +836,13 @@ class data:
             Args:
                 PositiveSample_inst (data.PositiveSamples): loaded positive-samples collection to iterate over
                 batch_size (int): batch size
-                seed (int, optional): seed of this dataset's own random number generator, used for shuffling sample order. Defaults to 0.
+                seed (int, optional): seed for shuffling the sample order. Defaults to 0.
             """
 
             self.PositiveSample_inst = PositiveSample_inst
             self.batch_size          = batch_size
 
-            # Own random number generator, so the sample order does not depend on other users of np.random
+            # Random number generator for shuffling
             self.rng = np.random.RandomState(seed)
 
             self.inds = np.arange(len(self.PositiveSample_inst.data))

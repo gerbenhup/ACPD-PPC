@@ -13,7 +13,6 @@ loops, losses, probability/anomaly-scoring utilities), split into one module per
 | `PPC.dimension` | `PCA` wrapper (with Gaussian projection), `TSNE` wrapper |
 | `PPC.wrappers` | `TimeDistributed`, `time_stacked` Keras model wrappers |
 | `PPC.weights` | Loss time-weighting schemes |
-| `PPC.math` | Numerically-safe `log`/`exp`/`square`/`sqrt`/`abs` |
 | `PPC.callbacks` | `TerminateOnNaN`, `RestoreOnEarlyStopping`, `EarlyStopping`, `ReduceLROnPlateau` |
 | `PPC.tools` | `Settings`, `Arguments`, `num_trainable_weights`, PPC/PCPC model save/load helpers |
 | `PPC.gpu` | GPU discovery/selection via `nvidia-smi` |
@@ -36,16 +35,18 @@ changes.
 
 ## Setup
 
-Requires Python 3.9+ (for `list[int]`-style built-in generics) and a version compatible with
-`tensorflow==2.10.0` (Python 3.7-3.10).
+Requires Python 3.9 exactly: the saved models contain Lambda layers serialized as Python 3.9
+bytecode, which other Python versions cannot load. The pinned dependencies (`tensorflow==2.10.0`,
+the last TensorFlow release with native GPU support on Windows) are in `requirements.txt`.
 
 ```
 pip install -r requirements.txt
+pip install -e .   # optional: makes the PPC package importable from anywhere
 ```
 
 GPU selection is automatic (`PPC.gpu.find_available`): each script picks the first available GPU
-with utilization below 80% and at least 5500 MiB free memory. This requires `nvidia-smi` to be on
-`PATH`.
+with utilization below 80% and at least 5500 MiB free memory, using `nvidia-smi`. Without
+`nvidia-smi` (no NVIDIA GPU), the scripts run on the CPU.
 
 ## Reproducing the experiments
 
@@ -69,7 +70,7 @@ per model (Figure 2 style) and printing the true-vs-fitted Gaussian parameter co
 
 ### `sine_frequency` (§4.2, "Sine wave frequency deviation")
 
-Datasets must be generated once before training (~17 GB of `.h5` files under
+Datasets must be generated once before training (~15 GB of `.h5` files under
 `PPC_examples/sine_frequency/`):
 
 ```
@@ -93,7 +94,7 @@ python test.py
 
 `train.py` trains one model and saves it to `models/<hash>/`, where `<hash>` is a deterministic
 hash of the model's hyperparameters (`PPC.tools.Settings.__hash__`) — rerunning `train.py` with
-the same settings resumes/skips training if the directory already exists. `test.py` evaluates
+the same settings skips training if a complete model (with `settings.json`) already exists. `test.py` evaluates
 every model directory under `models/`, producing `mnist-matrix.pdf` (Figure 6), `mnist-curves.pdf`
 (Figure 7), `mnist-latent-hexbin.pdf` (Figure 8), and printing the full set of threshold-dependent
 detection metrics (best threshold selected on a validation split, evaluated on the test split).
@@ -119,7 +120,7 @@ directly:
 
 ### `PCPC_examples/sine_frequency`
 
-Datasets must be generated once before training (~60 GB of `.h5` files): training and validation
+Datasets must be generated once before training (~46 GB of `.h5` files): training and validation
 sets of 1,000,000 and 100,000 samples with 9 negative samples each, and the test sets. The test sets
 use the same settings and seeds as the PPC sine experiment, so they are identical to the PPC test
 sets.
@@ -152,13 +153,27 @@ All randomness is seeded:
 
 - Generated datasets: sample `i` of a dataset with seed `s` is generated with seed `(s, i)`, so the
   `.h5` files are identical on every run, regardless of the number of worker processes.
-- Training: every dataset object owns its random number generator (`seed` argument), the global
-  seeds are set with `tf.keras.utils.set_random_seed`, and
+- Training: every dataset object draws from its own random number generators, one per pass over
+  the dataset (per call of `train`), seeded with `(seed, pass)`; the global seeds are set with
+  `tf.keras.utils.set_random_seed`; and
   `tf.config.experimental.enable_op_determinism()` makes TensorFlow operations deterministic, so
   rerunning `train.py` on the same hardware and software gives the same model. The exception is
   `PPC_examples/mnist_sequence`: the gradient of its `UpSampling2D` layers has no deterministic GPU
   implementation, so there the determinism switch is off and reruns on a GPU can differ slightly.
-- Testing: the F1-optimal threshold search (`scipy.optimize.differential_evolution`) uses `seed=0`.
+- Testing is deterministic.
+
+## Training and evaluation details
+
+- Early stopping (`PPC.callbacks.RestoreOnEarlyStopping`) monitors the moving average of the
+  validation loss over the last 100 iterations, not the loss of a single validation batch.
+- Anomaly score: the squared Mahalanobis distance of the true encoding to the predicted
+  distribution. It ranks samples in the same order as 1 - probability of conformance (the tail
+  probability shown in the figures), but does not saturate: the tail probability underflows to
+  exactly 0 for very large distances, which would create ties in the ROC/PR curves.
+- Decision threshold: the threshold that maximizes F1 on the validation set, chosen exactly among
+  all thresholds of the validation precision-recall curve, and then applied to the test set.
+- Sine experiments: in the labelled metric sets, a sample counts as anomalous whenever the center
+  frequency changes across the change point, however small the change.
 
 ## Citation
 

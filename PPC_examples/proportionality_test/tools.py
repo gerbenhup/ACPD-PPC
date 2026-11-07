@@ -87,7 +87,8 @@ class models:
 
         outputs_means = tf.keras.layers.Dense(Ne, activation='linear')(x)
         outputs_stds  = tf.keras.layers.Dense(Ne, activation='linear')(x)
-        outputs_stds  = tf.keras.layers.Lambda(lambda y: PPC.math.exp(y), name='Exponential')(outputs_stds)
+        # Standard deviations, with clipped log standard deviations to avoid underflow and overflow
+        outputs_stds  = tf.keras.layers.Lambda(lambda y: tf.math.exp(tf.clip_by_value(y, -20.0, 88.0)), name='Exponential')(outputs_stds)
 
         outputs = tf.keras.layers.Lambda(lambda x: tf.stack(x, axis=-1), name='Stack1D')([outputs_means, outputs_stds])
 
@@ -107,25 +108,29 @@ class data:
                 batch_size (int): batch size
                 step1_generator (callable): callable(batch_size, rng) -> x1 samples
                 step2_generator (callable): callable(x1 samples, rng) -> x2 samples
-                seed (int, optional): seed of this dataset's own random number generator, which is passed to the step generators. Defaults to 0.
+                seed (int, optional): seed for drawing the samples. Defaults to 0.
             """
 
             self.batch_size      = batch_size
             self.step1_generator = step1_generator
             self.step2_generator = step2_generator
 
-            # Own random number generator, so the drawn samples do not depend on other users of np.random
-            self.rng = np.random.RandomState(seed)
+            # Random number generator seed and number of passes over the dataset
+            self.seed       = seed
+            self.num_passes = 0
 
-        def prepare_batch(self) -> Tuple[np.ndarray, np.ndarray]:
+        def prepare_batch(self, rng: np.random.RandomState) -> Tuple[np.ndarray, np.ndarray]:
             """Draw one batch of (x1, x2) sample pairs
+
+            Args:
+                rng (np.random.RandomState): random number generator to draw with
 
             Returns:
                 Tuple[np.ndarray, np.ndarray]: batch of x1 samples and batch of x2 samples
             """
 
-            samples_past   = self.step1_generator(self.batch_size, self.rng) # [B,]
-            samples_future = self.step2_generator(samples_past, self.rng) # [B,]
+            samples_past   = self.step1_generator(self.batch_size, rng) # [B,]
+            samples_future = self.step2_generator(samples_past, rng) # [B,]
 
             samples_past   = np.reshape(samples_past, (self.batch_size, 1, 1))
             samples_future = np.reshape(samples_future, (self.batch_size, 1, 1))
@@ -139,8 +144,12 @@ class data:
                 Tuple[np.ndarray, np.ndarray]: batch of x1 samples and batch of x2 samples
             """
 
+            # New random number generator for every pass over the dataset
+            rng = np.random.RandomState([self.seed, self.num_passes])
+            self.num_passes += 1
+
             while True:
-                yield self.prepare_batch()
+                yield self.prepare_batch(rng)
 
         def __iter__(self) -> Iterator:
             """Iterate over batches of the underlying tf.data.Dataset
@@ -350,7 +359,7 @@ class callbacks:
                         self.parameters_pred[-1].append([np.nan, np.nan])
 
                 pars_pred  = np.array(self.parameters_pred)
-                iterations = np.arange(len(pars_pred))*self.eval_iterations
+                iterations = (np.arange(len(pars_pred))+1)*self.eval_iterations
 
                 # Get pyplot color cycle
                 colors = plt.rcParams['axes.prop_cycle'].by_key()['color']

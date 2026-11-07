@@ -5,7 +5,7 @@ import tools
 
 if __name__ == '__main__':
 
-    # Training and validation data, with Nchi negative samples per sample
+    # Training and validation sets
     if not (Path(__file__).parent / 'train_dataset.h5').exists():
         print('Generating train dataset')
         dataset = tools.data.ContrastiveSamples.create(
@@ -58,8 +58,7 @@ if __name__ == '__main__':
             seed                        = 1,
         )
 
-    # Test sets. These use the same settings and seeds as PPC_examples/sine_frequency/generate_datasets.py,
-    # so they are identical to the PPC test sets and the results of PPC and PCPC can be compared directly.
+    # Test sets, identical to those of PPC_examples/sine_frequency
     if not (Path(__file__).parent / 'test_dataset.h5').exists():
         print('Generating test dataset')
         dataset = tools.data.GridSamples.create(

@@ -9,12 +9,11 @@ import matplotlib.pyplot as plt
 import itertools
 import sklearn.metrics
 import scipy.stats
-import scipy.optimize
 from tqdm import tqdm
 
 def compute_matrices(MNIST_inst, encoder_model, ar_model, forecast_models, batch_size):
     """Compute per-image encodings/forecasts and the resulting pairwise log-likelihood,
-    tail-probability and successive-digit truth matrices for a MNIST split."""
+    tail-probability, squared Mahalanobis distance and successive-digit truth matrices for a MNIST split."""
 
     encodings             = encoder_model.predict(MNIST_inst.dataset_with_labels[0], batch_size=batch_size, verbose=1)
     contexts              = ar_model.predict(tf.expand_dims(encodings, axis=1), batch_size=batch_size, verbose=1)[:, 0, :]
@@ -23,10 +22,12 @@ def compute_matrices(MNIST_inst, encoder_model, ar_model, forecast_models, batch
     n = len(MNIST_inst.dataset_with_labels[0])
     loglikelihoods = np.empty((n, n), dtype=np.float32)
     probabilities  = np.empty((n, n), dtype=np.float32)
+    distances      = np.empty((n, n), dtype=np.float32)
 
     for i in tqdm(range(n)):
         loglikelihoods[i, :] = PPC.probability.gaussian_log_likelihood(encodings, encodings_future_pred[i:i+1])
         probabilities[i, :]  = PPC.probability.multivariate_gaussian_tail_probability(encodings, encodings_future_pred[i:i+1])
+        distances[i, :]      = PPC.probability.squared_mahalanobis_distance(encodings, encodings_future_pred[i:i+1])
 
     truth = np.zeros((n, n), dtype=bool)
     for label_a, label_b in itertools.product(range(10), repeat=2):
@@ -35,7 +36,7 @@ def compute_matrices(MNIST_inst, encoder_model, ar_model, forecast_models, batch
             inds_b = np.argwhere(MNIST_inst.dataset_with_labels[1] == label_b).ravel()
             truth[np.ix_(inds_a, inds_b)] = True
 
-    return encodings, encodings_future_pred, loglikelihoods, probabilities, truth
+    return encodings, encodings_future_pred, loglikelihoods, probabilities, distances, truth
 
 if  __name__ == '__main__':
 
@@ -53,7 +54,8 @@ if  __name__ == '__main__':
     val_MNIST_inst  = tools.data.MNIST('val')
     test_MNIST_inst = tools.data.MNIST('test')
 
-    for save_dir in models_dir.iterdir():
+    # Loop through all trained models
+    for save_dir in sorted(p.parent for p in models_dir.glob('*/settings.json')):
 
         print(save_dir.stem)
 
@@ -61,10 +63,10 @@ if  __name__ == '__main__':
         settings = PPC.tools.Settings.load(save_dir / 'settings.json')
 
         # Pairwise scores on validation (threshold search) and test (figures + final metrics)
-        _, _, _, val_probabilities, val_truth = compute_matrices(
+        _, _, _, _, val_distances, val_truth = compute_matrices(
             val_MNIST_inst, encoder_model, ar_model, forecast_models, settings.batch_size,
         )
-        test_encodings, test_encodings_future_pred, test_loglikelihoods, test_probabilities, test_truth = compute_matrices(
+        test_encodings, test_encodings_future_pred, test_loglikelihoods, test_probabilities, test_distances, test_truth = compute_matrices(
             test_MNIST_inst, encoder_model, ar_model, forecast_models, settings.batch_size,
         )
 
@@ -104,8 +106,9 @@ if  __name__ == '__main__':
         val_y_true  = ~val_truth.flatten()
         test_y_true = ~test_truth.flatten()
 
-        val_y_pred  = 1 - val_probabilities.flatten()
-        test_y_pred = 1 - test_probabilities.flatten()
+        # Anomaly score: squared Mahalanobis distance (unlike the tail probability, it does not saturate)
+        val_y_pred  = val_distances.flatten()
+        test_y_pred = test_distances.flatten()
 
         # Figure 7: ROC + PRC curves on the test set
         roc_fpr, roc_tpr, _          = sklearn.metrics.roc_curve(y_true=test_y_true, y_score=test_y_pred)
@@ -147,25 +150,9 @@ if  __name__ == '__main__':
         print(f'PRC AUC: {prc_auc}')
 
         # Find the decision threshold that maximizes F1 on the validation set
-        def func(threshold):
-
-            y_pred_binary = val_y_pred >= float(threshold)
-
-            TP = np.sum(np.logical_and(val_y_true, y_pred_binary))
-            FP = np.sum(np.logical_and(~val_y_true, y_pred_binary))
-            FN = np.sum(np.logical_and(val_y_true, ~y_pred_binary))
-
-            f1_score = (2*TP)/(2*TP+FP+FN)
-
-            return -f1_score
-
-        res = scipy.optimize.differential_evolution(
-            func   = func,
-            bounds = [(0., 1.)],
-            seed   = 0,
-        )
-
-        best_threshold = res.x
+        val_precision, val_recall, val_thresholds = sklearn.metrics.precision_recall_curve(y_true=val_y_true, probas_pred=val_y_pred)
+        val_f1_scores  = 2*val_precision[:-1]*val_recall[:-1] / np.maximum(val_precision[:-1] + val_recall[:-1], 1e-12)
+        best_threshold = val_thresholds[np.argmax(val_f1_scores)]
 
         print(f'best_threshold: {best_threshold}')
 
@@ -209,7 +196,7 @@ if  __name__ == '__main__':
         example_inds = np.concatenate(example_inds)
 
         xlims = np.array([reduced_encodings[example_inds, 0].min(), reduced_encodings[example_inds, 0].max()]) + np.array([-0.1, 0.1]) * (reduced_encodings[example_inds, 0].max() - reduced_encodings[example_inds, 0].min())
-        ylims = np.array([reduced_encodings[example_inds, 1].min(), reduced_encodings[example_inds, 1].max()]) + np.array([-0.1, 0.1]) * (reduced_encodings[example_inds, 0].max() - reduced_encodings[example_inds, 1].min())
+        ylims = np.array([reduced_encodings[example_inds, 1].min(), reduced_encodings[example_inds, 1].max()]) + np.array([-0.1, 0.1]) * (reduced_encodings[example_inds, 1].max() - reduced_encodings[example_inds, 1].min())
 
         global_vmin = np.inf
         global_vmax = -np.inf

@@ -38,6 +38,9 @@ if  __name__ == '__main__':
         Ng                   = Ng,
         encoder_filters      = encoder_filters,
         forecast_dense_units = forecast_dense_units,
+        learning_rate        = 1e-4,
+        warmup_iterations    = 1000,
+        patience             = 10000,
     )
 
     print(settings)
@@ -45,8 +48,8 @@ if  __name__ == '__main__':
     # Select save directory
     save_dir = Path(__file__).parent.resolve() / 'models/{}'.format(hash(settings))
 
-    # If the model does not exist, create and train it
-    if not save_dir.exists():
+    # Train the model if it has not been trained yet
+    if not (save_dir / 'settings.json').exists():
 
         save_dir.mkdir(parents=True, exist_ok=True)
 
@@ -104,8 +107,8 @@ if  __name__ == '__main__':
             dataset            = dataset,
             val_dataset        = val_dataset,
             forecast_loss_func = PPC.losses.ContrastiveNLLRLoss(PPC.weights.uniform(settings.Nf), warmup=True),
-            optimizer          = tf.keras.optimizers.RMSprop(learning_rate=1e-4),
-            iterations         = 1000,
+            optimizer          = tf.keras.optimizers.RMSprop(learning_rate=settings.learning_rate),
+            iterations         = settings.warmup_iterations,
             callbacks          = [PPC.callbacks.TerminateOnNaN()],
         )
 
@@ -113,10 +116,10 @@ if  __name__ == '__main__':
             dataset            = dataset,
             val_dataset        = val_dataset,
             forecast_loss_func = PPC.losses.ContrastiveNLLRLoss(PPC.weights.uniform(settings.Nf), warmup=False),
-            optimizer          = tf.keras.optimizers.RMSprop(learning_rate=1e-4),
+            optimizer          = tf.keras.optimizers.RMSprop(learning_rate=settings.learning_rate),
             callbacks          = [
                 PPC.callbacks.TerminateOnNaN(),
-                PPC.callbacks.RestoreOnEarlyStopping(monitor='val_forecast_loss', patience=10000, models=[encoder_model, ar_model] + forecast_models),
+                PPC.callbacks.RestoreOnEarlyStopping(monitor='val_forecast_loss', patience=settings.patience, models=[encoder_model, ar_model] + forecast_models),
             ],
         )
 
