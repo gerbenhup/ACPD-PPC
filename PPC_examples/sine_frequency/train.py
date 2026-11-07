@@ -102,7 +102,7 @@ if  __name__ == '__main__':
         trainer.train(
             dataset                  = dataset,
             val_dataset              = val_dataset,
-            forecast_loss_func       = PPC.losses.MaximumLogLikelihoodLoss(PPC.weights.Uniform(PositiveSample_inst.Nf), warmup=True),
+            forecast_loss_func       = PPC.losses.MaximumLogLikelihoodLoss(PPC.weights.uniform(PositiveSample_inst.Nf), warmup=True),
             reconstruction_loss_func = PPC.losses.MeanSquaredError(),
             lambda_loss              = settings.lambda_loss,
             optimizer                = tf.keras.optimizers.RMSprop(learning_rate=1e-4),
@@ -113,7 +113,7 @@ if  __name__ == '__main__':
         trainer.train(
             dataset                  = dataset,
             val_dataset              = val_dataset,
-            forecast_loss_func       = PPC.losses.MaximumLogLikelihoodLoss(PPC.weights.Uniform(PositiveSample_inst.Nf), warmup=False),
+            forecast_loss_func       = PPC.losses.MaximumLogLikelihoodLoss(PPC.weights.uniform(PositiveSample_inst.Nf), warmup=False),
             reconstruction_loss_func = PPC.losses.MeanSquaredError(),
             lambda_loss              = settings.lambda_loss,
             optimizer                = tf.keras.optimizers.RMSprop(learning_rate=1e-4),

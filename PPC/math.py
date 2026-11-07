@@ -1,8 +1,8 @@
 import tensorflow as tf
 
 def log(x: tf.Tensor) -> tf.Tensor:
-    """Safe logarithm function. Inputs are clipped to avoid non-allowed input values.
-    Clipped at (almost) zero. Gradients not passing whenever input is not safe.
+    """Logarithm that is safe for inputs <= 0: inputs are clipped to the smallest positive normal float32.
+    No gradient flows through clipped inputs.
 
     Args:
         x (tf.Tensor): input value
@@ -17,8 +17,8 @@ def log(x: tf.Tensor) -> tf.Tensor:
     return x_log
 
 def exp(x: tf.Tensor) -> tf.Tensor:
-    """Safe exponent function. Inputs are clipped to avoid non-allowed input values.
-    Clipped at log(tf.float32.max). Gradients not passing whenever input is not safe.
+    """Exponent that does not overflow: inputs are clipped at log(tf.float32.max).
+    No gradient flows through clipped inputs.
 
     Args:
         x (tf.Tensor): input value
@@ -33,8 +33,8 @@ def exp(x: tf.Tensor) -> tf.Tensor:
     return x_exp
 
 def square(x: tf.Tensor) -> tf.Tensor:
-    """Safe square function. Inputs are clipped to avoid non-allowed input values.
-    Clipped at sqrt(tf.float32.max). Gradients not passing whenever input is not safe.
+    """Square that does not overflow: absolute inputs are clipped at sqrt(tf.float32.max).
+    No gradient flows through clipped inputs.
 
     Args:
         x (tf.Tensor): input value
@@ -50,7 +50,7 @@ def square(x: tf.Tensor) -> tf.Tensor:
     return x_square
 
 def sqrt(x: tf.Tensor) -> tf.Tensor:
-    """Placeholder safe sqrt function. Currently, no operations are expected to give unsafe inputs.
+    """Square root; no clipping, as no operation is expected to give unsafe inputs. Kept for symmetry with the other functions.
 
     Args:
         x (tf.Tensor): input value
@@ -62,7 +62,7 @@ def sqrt(x: tf.Tensor) -> tf.Tensor:
     return tf.math.sqrt(x)
 
 def abs(x: tf.Tensor) -> tf.Tensor:
-    """Placeholder safe abs function. Currently, no operations are expected to give unsafe inputs.
+    """Absolute value; no clipping, as no operation is expected to give unsafe inputs. Kept for symmetry with the other functions.
 
     Args:
         x (tf.Tensor): input value

@@ -1,13 +1,13 @@
 import tensorflow as tf
 
-def TimeDistributed(module: tf.keras.layers.Layer) -> tf.keras.Model:
-    """Wrap module in TimeDistributed wrapper.
+def time_distributed(module: tf.keras.layers.Layer) -> tf.keras.Model:
+    """Apply a module to every step of an extra time axis, e.g. an encoder to every segment of a sequence
 
     Args:
-        module (tf.keras.layers.Layer): module to wrap
+        module (tf.keras.layers.Layer): module with input shape [B, ...]
 
     Returns:
-        tf.keras.Model: wrapped module
+        tf.keras.Model: model with input shape [B, T, ...], applying the module to each of the T steps
     """
 
     # Get old and new input shapes
@@ -21,15 +21,18 @@ def TimeDistributed(module: tf.keras.layers.Layer) -> tf.keras.Model:
 
     return new_module
 
-def TimeStacked(modules: list[tf.keras.layers.Layer], inputs_concat: list[bool]) -> tf.keras.Model:
-    """Wrap multiple modules with the same input sizes into one module with stacked outputs
+def time_stacked(modules: list[tf.keras.layers.Layer], inputs_concat: list[bool]) -> tf.keras.Model:
+    """Combine T modules with the same inputs into one model whose outputs are stacked along a new time axis
+
+    Used to run the Nf forecast models (one per future step) as a single model: [B, Ng] -> [B, Nf, Ne, 2].
 
     Args:
-        modules (list[tf.keras.layers.Layer]): list of TensorFlow modules, e.g., models or layers
-        inputs_concat (list[bool]): whether to stack the input elements of each seperate module or to use a single input
+        modules (list[tf.keras.layers.Layer]): T modules with identical input shapes, e.g. models or layers
+        inputs_concat (list[bool]): for each input of the modules, whether every module gets its own slice of a
+            stacked input of shape [B, T, ...] (True), or all modules share the same input (False)
 
     Returns:
-        tf.keras.Model: stacked modules in a single model
+        tf.keras.Model: model with the module outputs stacked along axis 1, shape [B, T, ...]
     """
 
     new_inputs        = [None for _ in range(len(inputs_concat))]

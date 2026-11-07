@@ -9,9 +9,11 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 
 class models:
+    """Encoder, decoder, autoregressive and forecast models"""
 
     def encoder_model(Ne: int, filters: int, image_shape: Tuple[int, int]) -> tf.keras.Model:
-        """Create encoder model
+        """Create the encoder: two blocks of Conv2D (kernel size 3, ReLU), batch normalization and max pooling,
+        with filters and 2*filters channels, and a linear dense layer, [B, H, W, 1] -> [B, Ne]
 
         Args:
             Ne (int): size of encoding vector
@@ -40,7 +42,8 @@ class models:
         return model
 
     def decoder_model(Ne: int, filters: int, image_shape: Tuple[int, int]) -> tf.keras.Model:
-        """Create decoder model
+        """Create the decoder, mirroring the encoder: a linear dense layer reshaped to [H/4, W/4, 2*filters], two blocks
+        of Conv2D (kernel size 3, ReLU) and upsampling, and a linear Conv2D output layer, [B, Ne] -> [B, H, W, 1]
 
         Args:
             Ne (int): size of encoding vector
@@ -68,7 +71,7 @@ class models:
         return model
 
     def ar_model(Np: int, Ne: int, Ng: int) -> tf.keras.Model:
-        """Create autoregressive model
+        """Create the autoregressive model: a GRU with Ng units and linear activation, [B, Np, Ne] -> [B, Np, Ng]
 
         Args:
             Np (int): number of input encodings
@@ -84,9 +87,10 @@ class models:
         model   = tf.keras.Model(inputs, outputs)
 
         return model
-    
+
     def forecast_model(Ng: int, Ne: int, dense_units: int) -> tf.keras.Model:
-        """Create forecast model
+        """Create a forecast model: three ReLU dense layers (dense_units, 2*dense_units, 4*dense_units units) and
+        linear output layers for the means and log standard deviations, [B, Ng] -> [B, Ne, 2]
 
         Args:
             Ng (int): size of context vector
@@ -114,8 +118,9 @@ class models:
         return model
 
 class augmentation:
+    """Data augmentation"""
 
-    def MNISTaugmentation() -> Tuple[tf.keras.Model, tf.keras.Model]:
+    def mnist_augmentation() -> Tuple[tf.keras.Model, tf.keras.Model]:
         """Create the past/future augmentation models used to perturb MNIST digit sequences during training
 
         Past samples are augmented more mildly (rotation/zoom/translation factor 0.05) than future
@@ -166,8 +171,10 @@ class augmentation:
         return model_past, model_future
 
 class data:
+    """MNIST splits and successive-digit sequence datasets"""
 
     class MNIST:
+        """MNIST split (train, validation or test), with the images indexed by digit label"""
 
         def __init__(self, dataset: str, seed: int=0):
             """Load an MNIST split and index it by digit label
@@ -230,6 +237,7 @@ class data:
                 self.dataset_per_label[unique_label] = x[inds, :, :]
 
     class MNISTSequenceDataset:
+        """Dataset of successive-digit MNIST sequences"""
 
         def __init__(
             self,
@@ -247,7 +255,7 @@ class data:
                 batch_size (int): batch size
                 Np (int): number of past samples per sequence
                 Nf (int): number of future samples per sequence
-                augmentation (Optional[tf.keras.Model], optional): (past, future) augmentation models, as returned by augmentation.MNISTaugmentation. Defaults to None.
+                augmentation (Optional[tf.keras.Model], optional): (past, future) augmentation models, as returned by augmentation.mnist_augmentation. Defaults to None.
                 seed (int, optional): seed of this dataset's own random number generator, used to draw the sequences. Defaults to 0.
             """
 
@@ -360,12 +368,13 @@ class data:
             return dataset
 
 class callbacks:
+    """Training-time callbacks"""
 
-    class MNISTmonitor:
+    class MNISTMonitor:
+        """Training-time callback that periodically plots losses, reconstructions, latent space and prediction matrix"""
 
         def __init__(self, encoder_model: tf.keras.Model, decoder_model: tf.keras.Model, ar_model: tf.keras.Model, forecast_models: List[tf.keras.Model], MNIST_inst: data.MNIST, eval_examples_per_digit: int, eval_iterations: int, fig_dir: Path):
-            """Training-time callback that periodically plots losses, reconstructions, latent space and prediction matrix
-
+            """
             Args:
                 encoder_model (tf.keras.Model): encoder model
                 decoder_model (tf.keras.Model): decoder model
@@ -412,7 +421,7 @@ class callbacks:
             self.iterations += 1
 
             if np.mod(self.iterations, self.eval_iterations) == 0:
-                
+
                 # Plot losses
                 plt.figure(figsize=[10, 10])
                 for i, loss_name in enumerate(self.train_losses):
@@ -437,7 +446,7 @@ class callbacks:
 
                 example_imgs   = np.expand_dims(self.MNIST_inst.dataset_with_labels[0][example_inds], axis=-1)
                 example_labels = self.MNIST_inst.dataset_with_labels[1][example_inds]
-            
+
                 # Fetch model outputs
                 encodings             = self.encoder_model(example_imgs)
                 contexts              = self.ar_model.predict(tf.expand_dims(encodings, axis=1))[:, 0, :]
@@ -474,13 +483,13 @@ class callbacks:
                 except Exception as e:
                     print(e)
                 plt.close()
-                
+
                 # Plot prediction matrix
                 pred_matrix = np.zeros((10, 10), dtype=np.float32)
 
                 for ind_a in range(len(example_imgs)):
                     for ind_b in range(len(example_imgs)):
-                        pred_matrix[example_labels[ind_a], example_labels[ind_b]] += PPC.probability.GaussianLogLikelihood(encodings[ind_a], encodings_future_pred[ind_b])
+                        pred_matrix[example_labels[ind_a], example_labels[ind_b]] += PPC.probability.gaussian_log_likelihood(encodings[ind_a], encodings_future_pred[ind_b])
 
                 pred_matrix /= len(example_imgs) ** 2
 
@@ -497,8 +506,9 @@ class callbacks:
                 plt.close()
 
             return True
-        
+
 class colormaps:
+    """Colormaps for the figures"""
 
     def get_modified_oranges():
         """Get the matplotlib 'Oranges' colormap with its lowest value forced to white
@@ -508,7 +518,7 @@ class colormaps:
         """
 
         cmap = mpl.colormaps['Oranges']
-        
+
         cmap._segmentdata['red'][0, 1:]   = 1
         cmap._segmentdata['green'][0, 1:] = 1
         cmap._segmentdata['blue'][0, 1:]  = 1

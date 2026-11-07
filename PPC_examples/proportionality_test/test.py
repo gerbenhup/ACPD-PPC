@@ -40,8 +40,8 @@ if __name__ == '__main__':
         encoder_model, decoder_model, ar_model, forecast_models = PPC.tools.load_ppc_models(
             dir = save_dir,
         )
-        encoder_model_t1d = PPC.wrappers.TimeDistributed(encoder_model)
-        forecast_model_ts = PPC.wrappers.TimeStacked(forecast_models, [False])
+        encoder_model_t1d = PPC.wrappers.time_distributed(encoder_model)
+        forecast_model_ts = PPC.wrappers.time_stacked(forecast_models, [False])
 
         # Create grid
         grid_min = np.min(settings.choice_step_one_values) - 6*(settings.normal_a*np.min(settings.choice_step_one_values)+settings.normal_b)
@@ -71,7 +71,7 @@ if __name__ == '__main__':
             encodings_future_pred = forecast_model_ts.predict(ar_model(encodings_past)[:, -1, :], batch_size=settings.batch_size, verbose=0)
             encodings_future_true = encoder_model_t1d.predict(samples_future, batch_size=settings.batch_size, verbose=0)
 
-            EDF_pred[:, i]  = np.array(PPC.probability.GaussianExpNormLogLikelihood(encodings_future_true, encodings_future_pred)[:, 0])
+            EDF_pred[:, i]  = np.array(PPC.probability.gaussian_exp_norm_log_likelihood(encodings_future_true, encodings_future_pred)[:, 0])
             EDF_pred[:, i] /= scipy.integrate.trapezoid(EDF_pred[:, i], grid)
 
             mu_pred, sigma_pred, mae = tools.functions.fit_gaussian(grid, EDF_pred[:, i])

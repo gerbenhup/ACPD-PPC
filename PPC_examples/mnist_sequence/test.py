@@ -25,8 +25,8 @@ def compute_matrices(MNIST_inst, encoder_model, ar_model, forecast_models, batch
     probabilities  = np.empty((n, n), dtype=np.float32)
 
     for i in tqdm(range(n)):
-        loglikelihoods[i, :] = PPC.probability.GaussianLogLikelihood(encodings, encodings_future_pred[i:i+1])
-        probabilities[i, :]  = PPC.probability.MultiVariateGaussianTailProbability(encodings, encodings_future_pred[i:i+1])
+        loglikelihoods[i, :] = PPC.probability.gaussian_log_likelihood(encodings, encodings_future_pred[i:i+1])
+        probabilities[i, :]  = PPC.probability.multivariate_gaussian_tail_probability(encodings, encodings_future_pred[i:i+1])
 
     truth = np.zeros((n, n), dtype=bool)
     for label_a, label_b in itertools.product(range(10), repeat=2):

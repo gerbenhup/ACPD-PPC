@@ -10,9 +10,10 @@ import scipy.optimize
 import matplotlib.pyplot as plt
 
 class models:
-    
+    """Encoder, decoder, autoregressive and forecast models"""
+
     def encoder_model(Ne: int) -> tf.keras.Model:
-        """Create encoder model
+        """Create the encoder: one linear dense layer, [B, 1] -> [B, Ne]
 
         Args:
             Ne (int): size of encoding vector
@@ -29,7 +30,7 @@ class models:
         return model
 
     def decoder_model(Ne: int) -> tf.keras.Model:
-        """Create decoder model
+        """Create the decoder: one linear dense layer, [B, Ne] -> [B, 1]
 
         Args:
             Ne (int): size of encoding vector
@@ -43,9 +44,9 @@ class models:
         model = tf.keras.Model(inputs, outputs)
 
         return model
-    
+
     def ar_model(Ne: int, Ng: int) -> tf.keras.Model:
-        """Create autoregressive model
+        """Create the autoregressive model: a GRU with Ng units, [B, 1, Ne] -> [B, 1, Ng]
 
         Args:
             Ne (int): size of encoding vector
@@ -60,9 +61,11 @@ class models:
         model   = tf.keras.Model(inputs, outputs)
 
         return model
-    
+
     def forecast_model(Ng: int, Ne: int, dense_units: int) -> tf.keras.Model:
-        """Create forecast model
+        """Create a forecast model: six swish dense layers (dense_units, dense_units, 2*dense_units, 2*dense_units,
+        4*dense_units, 4*dense_units units) and linear output layers for the means and log standard deviations,
+        [B, Ng] -> [B, Ne, 2]
 
         Args:
             Ng (int): size of context vector
@@ -93,6 +96,7 @@ class models:
         return model
 
 class data:
+    """Two-step generative process (x1, x2) and its tf.data dataset"""
 
     class TwoStepDataset:
         """tf.data-backed generator of (x1, x2) sample pairs from a two-step generative process"""
@@ -221,6 +225,7 @@ class data:
             return rng.normal(samples_future, self.std_func(samples_future)).astype(np.float32)
 
 class functions:
+    """Gaussian density and its fit to an estimated density"""
 
     def gaussian(x: np.ndarray, mu: float, sigma: float) -> np.ndarray:
         """Gaussian probability density function
@@ -257,6 +262,7 @@ class functions:
         return mu, sigma, mae
 
 class callbacks:
+    """Training-time callbacks"""
 
     class GaussianParameterMonitor:
         """Training-time callback that periodically fits and plots the estimated vs. true Gaussian parameters
@@ -291,8 +297,8 @@ class callbacks:
             self.fig_path               = fig_path
 
             # Stacked/distributed models
-            self.encoder_model_t1d = PPC.wrappers.TimeDistributed(self.encoder_model)
-            self.forecast_model_ts = PPC.wrappers.TimeStacked(self.forecast_models, [False])
+            self.encoder_model_t1d = PPC.wrappers.time_distributed(self.encoder_model)
+            self.forecast_model_ts = PPC.wrappers.time_stacked(self.forecast_models, [False])
 
             # Create grid
             grid_min  = np.min(self.choice_step_one_values) - 6*(self.normal_a*np.min(self.choice_step_one_values)+self.normal_b)
@@ -334,7 +340,7 @@ class callbacks:
                     encodings_future_pred = self.forecast_model_ts(self.ar_model(encodings_past)[:, -1, :])
                     encodings_future_true = self.encoder_model_t1d(self.samples_future)
 
-                    EDF_pred  = np.array(PPC.probability.GaussianExpNormLogLikelihood(encodings_future_true, encodings_future_pred)[:, 0])
+                    EDF_pred  = np.array(PPC.probability.gaussian_exp_norm_log_likelihood(encodings_future_true, encodings_future_pred)[:, 0])
                     EDF_pred /= scipy.integrate.trapezoid(EDF_pred, self.grid)
 
                     try:

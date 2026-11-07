@@ -61,7 +61,7 @@ if  __name__ == '__main__':
             batch_size   = settings.batch_size,
             Np           = settings.Np,
             Nf           = settings.Nf,
-            augmentation = tools.augmentation.MNISTaugmentation(),
+            augmentation = tools.augmentation.mnist_augmentation(),
             seed         = 0,
         )
         
@@ -107,7 +107,7 @@ if  __name__ == '__main__':
             forecast_models = forecast_models,
         )
 
-        monitor_callback = tools.callbacks.MNISTmonitor(
+        monitor_callback = tools.callbacks.MNISTMonitor(
             encoder_model           = encoder_model,
             decoder_model           = decoder_model,
             ar_model                = ar_model,
@@ -121,7 +121,7 @@ if  __name__ == '__main__':
         trainer.train(
             dataset                  = dataset,
             val_dataset              = val_dataset,
-            forecast_loss_func       = PPC.losses.MaximumLogLikelihoodLoss(PPC.weights.Uniform(settings.Nf), warmup=True),
+            forecast_loss_func       = PPC.losses.MaximumLogLikelihoodLoss(PPC.weights.uniform(settings.Nf), warmup=True),
             reconstruction_loss_func = PPC.losses.MeanSquaredError(),
             lambda_loss              = settings.lambda_loss,
             optimizer                = tf.keras.optimizers.RMSprop(learning_rate=1e-4),
@@ -135,7 +135,7 @@ if  __name__ == '__main__':
         trainer.train(
             dataset                  = dataset,
             val_dataset              = val_dataset,
-            forecast_loss_func       = PPC.losses.MaximumLogLikelihoodLoss(PPC.weights.Uniform(settings.Nf), warmup=False),
+            forecast_loss_func       = PPC.losses.MaximumLogLikelihoodLoss(PPC.weights.uniform(settings.Nf), warmup=False),
             reconstruction_loss_func = PPC.losses.MeanSquaredError(),
             lambda_loss              = settings.lambda_loss,
             optimizer                = tf.keras.optimizers.RMSprop(learning_rate=1e-4),

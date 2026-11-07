@@ -8,8 +8,7 @@ class PPC:
     """Trainer for Probabilistic Predictive Coding: encoder/decoder autoencoder combined with a probabilistic forecast of future encodings"""
 
     def __init__(self, encoder_model: tf.keras.Model, decoder_model: tf.keras.Model, ar_model: tf.keras.Model, forecast_models: list[tf.keras.Model]):
-        """Init method for trainer class
-
+        """
         Args:
             encoder_model (tf.keras.Model): encoder model, [B, ...] -> [B, Ne]
             decoder_model (tf.keras.Model): decoder model, [B, Ne] -> [B, ...]
@@ -24,9 +23,9 @@ class PPC:
         self.forecast_models = forecast_models
 
         # Create adapted models that can handle higher dimensionalities
-        self.encoder_model_td1 = wrappers.TimeDistributed(self.encoder_model)        # [B, T1, ...] -> [B, T1, Ne]
-        self.decoder_model_td1 = wrappers.TimeDistributed(self.decoder_model)        # [B, T1, Ne] -> [B, T1, ...]
-        self.forecast_model_ts = wrappers.TimeStacked(self.forecast_models, [False]) # [B, Ng] -> [B, T3, Ne, 2]
+        self.encoder_model_td1 = wrappers.time_distributed(self.encoder_model)        # [B, T1, ...] -> [B, T1, Ne]
+        self.decoder_model_td1 = wrappers.time_distributed(self.decoder_model)        # [B, T1, Ne] -> [B, T1, ...]
+        self.forecast_model_ts = wrappers.time_stacked(self.forecast_models, [False]) # [B, Ng] -> [B, T3, Ne, 2]
 
         # Collect trainable weights variables for future use in gradient descent
         self.trainable_weights = self.encoder_model.trainable_weights + self.decoder_model.trainable_weights + self.ar_model.trainable_weights
@@ -34,18 +33,20 @@ class PPC:
             self.trainable_weights += forecast_model.trainable_weights
 
     def train(self, dataset: tf.data.Dataset, val_dataset: tf.data.Dataset, forecast_loss_func: Callable, reconstruction_loss_func: Callable, lambda_loss: float, optimizer: tf.keras.optimizers.Optimizer, callbacks: Optional[List[Callable]]=None, iterations: Optional[int]=None, loss_window: int=100):
-        """Train the models with the provided parameters
+        """Train the models, alternating a train step and a validation step per iteration
+
+        Training stops after `iterations` iterations, or earlier when a callback returns False.
 
         Args:
-            dataset (tf.data.Dataset): train dataset
-            val_dataset (tf.data.Dataset): validation dataset
-            forecast_loss_func (Callable): forecast loss function
-            reconstruction_loss_func (Callable): reconstruction loss function
-            lambda_loss (float): loss weight for reconstruction loss
+            dataset (tf.data.Dataset): train dataset, yielding (past samples [B, Np, ...], future samples [B, Nf, ...])
+            val_dataset (tf.data.Dataset): validation dataset, yielding batches like `dataset`
+            forecast_loss_func (Callable): forecast loss, e.g. losses.MaximumLogLikelihoodLoss
+            reconstruction_loss_func (Callable): reconstruction loss, e.g. losses.MeanSquaredError
+            lambda_loss (float): weight of the reconstruction loss in the total loss
             optimizer (tf.keras.optimizers.Optimizer): optimizer
-            callbacks (List[Callable]): callbacks
-            iterations (Optional[int], optional): number of iterations to train. Defaults to None.
-            loss_window (int, optional): number of values to consider in the moving average loss that is displayed. Defaults to 100.
+            callbacks (Optional[List[Callable]], optional): called every iteration with the train and validation losses as keyword arguments; returning False stops training. Defaults to None.
+            iterations (Optional[int], optional): number of iterations to train; None trains until a callback stops training. Defaults to None.
+            loss_window (int, optional): number of iterations in the moving average of the printed losses. Defaults to 100.
         """
 
         # Prepare loss memory
@@ -125,13 +126,14 @@ class PPC:
                 return
 
     def train_step(self, samples_past: tf.Tensor, samples_future: tf.Tensor, forecast_loss_func: Callable, reconstruction_loss_func: Callable, lambda_loss: float, optimizer: tf.keras.optimizers.Optimizer) -> Tuple[float, float, float]:
-        """Apply a single train step
+        """Apply one gradient descent step on a batch (models in training mode)
 
         Args:
             samples_past (tf.Tensor): past samples, shape [B, Np, ...]
             samples_future (tf.Tensor): future samples, shape [B, Nf, ...]
             forecast_loss_func (Callable): forecast loss function
             reconstruction_loss_func (Callable): reconstruction loss function
+            lambda_loss (float): weight of the reconstruction loss in the total loss
             optimizer (tf.keras.optimizers.Optimizer): optimizer
 
         Returns:
@@ -170,13 +172,14 @@ class PPC:
         return float(forecast_loss.numpy()), float(reconstruction_loss.numpy()), float(total_loss.numpy())
 
     def test_step(self, samples_past: tf.Tensor, samples_future: tf.Tensor, forecast_loss_func: Callable, reconstruction_loss_func: Callable, lambda_loss: float) -> Tuple[float, float, float]:
-        """Apply a single test step
+        """Compute the losses on a batch without updating the models (models in inference mode)
 
         Args:
             samples_past (tf.Tensor): past samples, shape [B, Np, ...]
             samples_future (tf.Tensor): future samples, shape [B, Nf, ...]
             forecast_loss_func (Callable): forecast loss function
             reconstruction_loss_func (Callable): reconstruction loss function
+            lambda_loss (float): weight of the reconstruction loss in the total loss
 
         Returns:
             Tuple[float, float, float]: forecast loss, reconstruction loss and total loss
@@ -210,8 +213,7 @@ class PCPC:
     """Trainer for Probabilistic Contrastive Predictive Coding: no decoder, the forecast distribution is trained contrastively against negative samples"""
 
     def __init__(self, encoder_model: tf.keras.Model, ar_model: tf.keras.Model, forecast_models: list[tf.keras.Model]):
-        """Init method for trainer class
-
+        """
         Args:
             encoder_model (tf.keras.Model): encoder model, [B, ...] -> [B, Ne]
             ar_model (tf.keras.Model): autoregressive model, [B, Np, Ne] -> [B, Np, Ng]. GRU/LSTM option return_sequences must be set to True.
@@ -224,9 +226,9 @@ class PCPC:
         self.forecast_models = forecast_models
 
         # Create adapted models that can handle higher dimensionalities
-        self.encoder_model_td1 = wrappers.TimeDistributed(self.encoder_model)        # [B, T1, ...] -> [B, T1, Ne]
-        self.encoder_model_td2 = wrappers.TimeDistributed(self.encoder_model_td1)    # [B, T2, T1, ...] -> [B, T2, T1, Ne]
-        self.forecast_model_ts = wrappers.TimeStacked(self.forecast_models, [False]) # [B, Ng] -> [B, T3, Ne, 2]
+        self.encoder_model_td1 = wrappers.time_distributed(self.encoder_model)        # [B, T1, ...] -> [B, T1, Ne]
+        self.encoder_model_td2 = wrappers.time_distributed(self.encoder_model_td1)    # [B, T2, T1, ...] -> [B, T2, T1, Ne]
+        self.forecast_model_ts = wrappers.time_stacked(self.forecast_models, [False]) # [B, Ng] -> [B, T3, Ne, 2]
 
         # Collect trainable weights variables for future use in gradient descent
         self.trainable_weights = self.encoder_model.trainable_weights + self.ar_model.trainable_weights
@@ -234,16 +236,18 @@ class PCPC:
             self.trainable_weights += forecast_model.trainable_weights
 
     def train(self, dataset: tf.data.Dataset, val_dataset: tf.data.Dataset, forecast_loss_func: Callable, optimizer: tf.keras.optimizers.Optimizer, callbacks: Optional[List[Callable]]=None, iterations: Optional[int]=None, loss_window: int=100):
-        """Train the models with the provided parameters
+        """Train the models, alternating a train step and a validation step per iteration
+
+        Training stops after `iterations` iterations, or earlier when a callback returns False.
 
         Args:
-            dataset (tf.data.Dataset): train dataset
-            val_dataset (tf.data.Dataset): validation dataset
-            forecast_loss_func (Callable): contrastive forecast loss function, e.g. losses.ContrastiveNLLRLoss
+            dataset (tf.data.Dataset): train dataset, yielding (past samples [B, Np, ...], positive future samples [B, Nf, ...], negative future samples [B, Nchi, Nf, ...])
+            val_dataset (tf.data.Dataset): validation dataset, yielding batches like `dataset`
+            forecast_loss_func (Callable): contrastive forecast loss, e.g. losses.ContrastiveNLLRLoss
             optimizer (tf.keras.optimizers.Optimizer): optimizer
-            callbacks (List[Callable]): callbacks
-            iterations (Optional[int], optional): number of iterations to train. Defaults to None.
-            loss_window (int, optional): number of values to consider in the moving average loss that is displayed. Defaults to 100.
+            callbacks (Optional[List[Callable]], optional): called every iteration with the train and validation losses as keyword arguments; returning False stops training. Defaults to None.
+            iterations (Optional[int], optional): number of iterations to train; None trains until a callback stops training. Defaults to None.
+            loss_window (int, optional): number of iterations in the moving average of the printed losses. Defaults to 100.
         """
 
         # Prepare loss memory
@@ -302,7 +306,7 @@ class PCPC:
                 return
 
     def train_step(self, samples_past: tf.Tensor, samples_future_pos: tf.Tensor, samples_future_neg: tf.Tensor, forecast_loss_func: Callable, optimizer: tf.keras.optimizers.Optimizer) -> float:
-        """Apply a single train step
+        """Apply one gradient descent step on a batch (models in training mode)
 
         Args:
             samples_past (tf.Tensor): past samples, shape [B, Np, ...]
@@ -338,7 +342,7 @@ class PCPC:
         return float(forecast_loss.numpy())
 
     def test_step(self, samples_past: tf.Tensor, samples_future_pos: tf.Tensor, samples_future_neg: tf.Tensor, forecast_loss_func: Callable) -> float:
-        """Apply a single test step
+        """Compute the losses on a batch without updating the models (models in inference mode)
 
         Args:
             samples_past (tf.Tensor): past samples, shape [B, Np, ...]

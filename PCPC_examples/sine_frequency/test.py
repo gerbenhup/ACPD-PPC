@@ -45,8 +45,8 @@ if  __name__ == '__main__':
 
         print(settings)
 
-        encoder_model_td1 = PPC.wrappers.TimeDistributed(encoder_model)
-        forecast_model_ts = PPC.wrappers.TimeStacked(forecast_models, [False])
+        encoder_model_td1 = PPC.wrappers.time_distributed(encoder_model)
+        forecast_model_ts = PPC.wrappers.time_stacked(forecast_models, [False])
 
         # Figure: example signal segments
         plt.figure(figsize=[6.85, 4])
@@ -88,8 +88,8 @@ if  __name__ == '__main__':
         encodings_future_true = encodings_future_true[:, 0, :]
         encodings_future_pred = encodings_future_pred[:, 0, :]
 
-        loglikelihoods = PPC.probability.GaussianLogLikelihood(encodings_future_true, encodings_future_pred)
-        probabilities  = PPC.probability.MultiVariateGaussianTailProbability(encodings_future_true, encodings_future_pred)
+        loglikelihoods = PPC.probability.gaussian_log_likelihood(encodings_future_true, encodings_future_pred)
+        probabilities  = PPC.probability.multivariate_gaussian_tail_probability(encodings_future_true, encodings_future_pred)
 
         loglikelihoods_res = tf.reshape(loglikelihoods, (loglikelihoods.shape[0]//test_GridSamples_inst.iterations, test_GridSamples_inst.iterations))
         probabilities_res  = tf.reshape(probabilities, (probabilities.shape[0]//test_GridSamples_inst.iterations, test_GridSamples_inst.iterations))
@@ -149,8 +149,8 @@ if  __name__ == '__main__':
         val_encodings_future_pred  = val_encodings_future_pred[:, 0, :]
         test_encodings_future_pred = test_encodings_future_pred[:, 0, :]
 
-        val_probabilities  = PPC.probability.MultiVariateGaussianTailProbability(val_encodings_future_true, val_encodings_future_pred)
-        test_probabilities = PPC.probability.MultiVariateGaussianTailProbability(test_encodings_future_true, test_encodings_future_pred)
+        val_probabilities  = PPC.probability.multivariate_gaussian_tail_probability(val_encodings_future_true, val_encodings_future_pred)
+        test_probabilities = PPC.probability.multivariate_gaussian_tail_probability(test_encodings_future_true, test_encodings_future_pred)
 
         val_y_true  = val_data_inst.anomaly_labels.astype(bool)
         test_y_true = test_data_inst.anomaly_labels.astype(bool)

@@ -34,9 +34,11 @@ GENERATOR_SETTINGS = dict(
 )
 
 class models:
+    """Encoder, autoregressive and forecast models (identical to the PPC sine example, without decoder)"""
 
     def encoder_model(Ne: int, filters: int, L: int) -> tf.keras.Model:
-        """Create encoder model
+        """Create the encoder: two blocks of Conv1D (kernel size 3, ReLU), batch normalization and max pooling,
+        with filters and 2*filters channels, and a linear dense layer, [B, L, 1] -> [B, Ne]
 
         Args:
             Ne (int): size of encoding vector
@@ -65,7 +67,7 @@ class models:
         return model
 
     def ar_model(Np: int, Ne: int, Ng: int) -> tf.keras.Model:
-        """Create autoregressive model
+        """Create the autoregressive model: a GRU with Ng units and linear activation, [B, Np, Ne] -> [B, Np, Ng]
 
         Args:
             Np (int): number of input encodings
@@ -83,7 +85,9 @@ class models:
         return model
 
     def forecast_model(Ng: int, Ne: int, dense_units: int) -> tf.keras.Model:
-        """Create forecast model
+        """Create a forecast model: six ReLU dense layers (dense_units, dense_units, 2*dense_units, 2*dense_units,
+        4*dense_units, 4*dense_units units) and linear output layers for the means and log standard deviations,
+        [B, Ng] -> [B, Ne, 2]
 
         Args:
             Ng (int): size of context vector
@@ -93,11 +97,6 @@ class models:
         Returns:
             tf.keras.Model: TensorFlow forecast model
         """
-
-        # Smallest standard deviation for which the Gaussian likelihood of an Ne-dimensional encoding still fits in
-        # float32. PCPC needs this lower bound because the contrastive loss uses the likelihood itself (not only the
-        # log-likelihood), which would overflow for smaller standard deviations.
-        sigma_min = float(1/(np.power(tf.float32.max, 1/Ne)*np.sqrt(2*np.pi)))
 
         inputs = tf.keras.Input((Ng,))
 
@@ -110,7 +109,7 @@ class models:
 
         outputs_means = tf.keras.layers.Dense(Ne, activation='linear')(x)
         outputs_stds  = tf.keras.layers.Dense(Ne, activation='linear')(x)
-        outputs_stds  = tf.keras.layers.Lambda(lambda y: tf.math.maximum(PPC.math.exp(y), sigma_min), name='Exponential')(outputs_stds)
+        outputs_stds  = tf.keras.layers.Lambda(lambda y: PPC.math.exp(y), name='Exponential')(outputs_stds)
 
         outputs = tf.keras.layers.Lambda(lambda x: tf.stack(x, axis=-1), name='Stack1D')([outputs_means, outputs_stds])
 
@@ -119,7 +118,7 @@ class models:
         return model
 
 class data:
-    """Sine wave signal generation"""
+    """Sine wave signal generation and the datasets built from it"""
 
     def constrained_random_walk(lower_bounds: Union[list, np.ndarray], upper_bounds: Union[list, np.ndarray], change_rate: float, last_state: Optional[float]=None, dtype: np.dtype=np.float32) -> np.ndarray:
         """Generate a random walk constrained to a set of lower and upper bounds.
@@ -312,7 +311,7 @@ class data:
 
         return signal_reshaped
 
-    class grid_sample_helper:
+    class GridSampleHelper:
         """Picklable callable that generates a single sample for a given (past, future) center-frequency pair
 
         Stores the signal-generation parameters (see `data.generate_signal`) and, on each call, generates a
@@ -400,7 +399,7 @@ class data:
 
             return t, signal, signal_reshaped[0]
 
-    class contrastive_sample_helper:
+    class ContrastiveSampleHelper:
         """Picklable callable that generates a single PCPC sample for `Pool.imap`
 
         A PCPC sample consists of a past signal, its positive continuation in the same frequency band, and
@@ -591,7 +590,7 @@ class data:
                 size (int): number of samples to generate
                 workers (int, optional): number of worker processes to generate samples in parallel. Defaults to 1.
                 seed (int, optional): seed of the dataset; sample i is generated with seed (seed, i). Defaults to 0.
-                (all other args): see `data.contrastive_sample_helper`
+                (all other args): see `data.ContrastiveSampleHelper`
 
             Returns:
                 data.ContrastiveSamples: the generated collection, opened from the newly written file
@@ -605,7 +604,7 @@ class data:
                 map_func   = pool.imap
                 close_func = pool.close
 
-            generator = data.contrastive_sample_helper(
+            generator = data.ContrastiveSampleHelper(
                 Np,
                 Nf,
                 L,
@@ -822,7 +821,7 @@ class data:
                 map_func   = pool.imap
                 close_func = pool.close
 
-            generator = data.grid_sample_helper(
+            generator = data.GridSampleHelper(
                 Np,
                 Nf,
                 L,
@@ -947,7 +946,7 @@ class data:
             # Random number generator for drawing the center frequencies
             rng = np.random.RandomState(seed)
 
-            generator = data.grid_sample_helper(
+            generator = data.GridSampleHelper(
                 Np,
                 Nf,
                 L,
@@ -1002,6 +1001,7 @@ class data:
             return data.PositiveNegativeSamples(path)
 
 class colormaps:
+    """Colormaps for the figures"""
 
     def get_modified_oranges():
         """Get the matplotlib 'Oranges' colormap with its lowest value forced to white

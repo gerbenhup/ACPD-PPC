@@ -60,7 +60,7 @@ if  __name__ == '__main__':
             Np           = settings.Np,
             Nf           = settings.Nf,
             Nchi         = settings.Nchi,
-            augmentation = tools.augmentation.MNISTaugmentation(),
+            augmentation = tools.augmentation.mnist_augmentation(),
             seed         = 0,
         )
 
@@ -103,7 +103,7 @@ if  __name__ == '__main__':
         trainer.train(
             dataset            = dataset,
             val_dataset        = val_dataset,
-            forecast_loss_func = PPC.losses.ContrastiveNLLRLoss(PPC.weights.Uniform(settings.Nf), warmup=True),
+            forecast_loss_func = PPC.losses.ContrastiveNLLRLoss(PPC.weights.uniform(settings.Nf), warmup=True),
             optimizer          = tf.keras.optimizers.RMSprop(learning_rate=1e-4),
             iterations         = 1000,
             callbacks          = [PPC.callbacks.TerminateOnNaN()],
@@ -112,7 +112,7 @@ if  __name__ == '__main__':
         trainer.train(
             dataset            = dataset,
             val_dataset        = val_dataset,
-            forecast_loss_func = PPC.losses.ContrastiveNLLRLoss(PPC.weights.Uniform(settings.Nf), warmup=False),
+            forecast_loss_func = PPC.losses.ContrastiveNLLRLoss(PPC.weights.uniform(settings.Nf), warmup=False),
             optimizer          = tf.keras.optimizers.RMSprop(learning_rate=1e-4),
             callbacks          = [
                 PPC.callbacks.TerminateOnNaN(),

@@ -11,7 +11,7 @@ loops, losses, probability/anomaly-scoring utilities), split into one module per
 | `PPC.losses` | `MeanAbsoluteError`, `MeanSquaredError`, `MaximumLogLikelihoodLoss` (Gaussian or Laplace prior), `ContrastiveNLLRLoss` (PCPC) |
 | `PPC.probability` | Gaussian (log-)likelihoods, Laplace log-likelihoods, Mahalanobis distance, tail probabilities |
 | `PPC.dimension` | `PCA` wrapper (with Gaussian projection), `TSNE` wrapper |
-| `PPC.wrappers` | `TimeDistributed`, `TimeStacked` Keras model wrappers |
+| `PPC.wrappers` | `TimeDistributed`, `time_stacked` Keras model wrappers |
 | `PPC.weights` | Loss time-weighting schemes |
 | `PPC.math` | Numerically-safe `log`/`exp`/`square`/`sqrt`/`abs` |
 | `PPC.callbacks` | `TerminateOnNaN`, `RestoreOnEarlyStopping`, `EarlyStopping`, `ReduceLROnPlateau` |
@@ -28,7 +28,7 @@ standard deviation per encoding dimension). To use a Laplace distribution instea
 scale), pass `distribution='Laplace'` to the forecast loss:
 
 ```python
-PPC.losses.MaximumLogLikelihoodLoss(PPC.weights.Uniform(Nf), warmup=False, distribution='Laplace')
+PPC.losses.MaximumLogLikelihoodLoss(PPC.weights.uniform(Nf), warmup=False, distribution='Laplace')
 ```
 
 The forecast model architecture stays the same; only the interpretation of its two output channels
@@ -103,15 +103,13 @@ detection metrics (best threshold selected on a validation split, evaluated on t
 `PCPC_examples/` trains the encoder, autoregressive and forecast models without a decoder. Instead
 of a reconstruction loss, the forecast distribution is trained contrastively
 (`PPC.losses.ContrastiveNLLRLoss`): the likelihood of the true future sample is maximized relative
-to the mean likelihood of `Nchi` negative samples. Models are trained by `PPC.trainers.PCPC` and
+to the mean likelihood of `Nchi` negative samples, computed stably in log space with log-sum-exp. Models are trained by `PPC.trainers.PCPC` and
 saved to `models/<hash>/`. As above, run the scripts from within each example's directory.
 
 The PCPC examples use the same settings as their PPC counterparts, so the results can be compared
 directly:
 
-- Same encoder, autoregressive and forecast models (PCPC has no decoder). The only difference is
-  that the PCPC forecast models bound the predicted standard deviation from below, because the
-  contrastive loss uses the likelihood itself, which would otherwise overflow in float32.
+- Same encoder, autoregressive and forecast models (PCPC has no decoder).
 - Same training procedure: RMSprop (learning rate 1e-4), 1000 warm-up iterations with unit
   standard deviation, then training until the validation forecast loss has not improved for 10000
   iterations, restoring the best weights.

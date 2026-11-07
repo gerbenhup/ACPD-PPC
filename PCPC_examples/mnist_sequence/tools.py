@@ -8,9 +8,11 @@ from typing import Tuple, Iterator, Optional
 import matplotlib as mpl
 
 class models:
+    """Encoder, autoregressive and forecast models (identical to the PPC MNIST example, without decoder)"""
 
     def encoder_model(Ne: int, filters: int, image_shape: Tuple[int, int]) -> tf.keras.Model:
-        """Create encoder model
+        """Create the encoder: two blocks of Conv2D (kernel size 3, ReLU), batch normalization and max pooling,
+        with filters and 2*filters channels, and a linear dense layer, [B, H, W, 1] -> [B, Ne]
 
         Args:
             Ne (int): size of encoding vector
@@ -39,7 +41,7 @@ class models:
         return model
 
     def ar_model(Np: int, Ne: int, Ng: int) -> tf.keras.Model:
-        """Create autoregressive model
+        """Create the autoregressive model: a GRU with Ng units and linear activation, [B, Np, Ne] -> [B, Np, Ng]
 
         Args:
             Np (int): number of input encodings
@@ -55,9 +57,10 @@ class models:
         model   = tf.keras.Model(inputs, outputs)
 
         return model
-    
+
     def forecast_model(Ng: int, Ne: int, dense_units: int) -> tf.keras.Model:
-        """Create forecast model
+        """Create a forecast model: three ReLU dense layers (dense_units, 2*dense_units, 4*dense_units units) and
+        linear output layers for the means and log standard deviations, [B, Ng] -> [B, Ne, 2]
 
         Args:
             Ng (int): size of context vector
@@ -68,11 +71,6 @@ class models:
             tf.keras.Model: TensorFlow forecast model
         """
 
-        # Smallest standard deviation for which the Gaussian likelihood of an Ne-dimensional encoding still fits in
-        # float32. PCPC needs this lower bound because the contrastive loss uses the likelihood itself (not only the
-        # log-likelihood), which would overflow for smaller standard deviations.
-        sigma_min = float(1/(np.power(tf.float32.max, 1/Ne)*np.sqrt(2*np.pi)))
-
         inputs = tf.keras.Input((Ng,))
 
         x = tf.keras.layers.Dense(dense_units, activation='relu')(inputs)
@@ -81,7 +79,7 @@ class models:
 
         outputs_means = tf.keras.layers.Dense(Ne, activation='linear')(x)
         outputs_stds  = tf.keras.layers.Dense(Ne, activation='linear')(x)
-        outputs_stds  = tf.keras.layers.Lambda(lambda y: tf.math.maximum(PPC.math.exp(y), sigma_min), name='Exponential')(outputs_stds)
+        outputs_stds  = tf.keras.layers.Lambda(lambda y: PPC.math.exp(y), name='Exponential')(outputs_stds)
 
         outputs = tf.keras.layers.Lambda(lambda x: tf.stack(x, axis=-1), name='Stack1D')([outputs_means, outputs_stds])
 
@@ -90,8 +88,9 @@ class models:
         return model
 
 class augmentation:
+    """Data augmentation"""
 
-    def MNISTaugmentation() -> Tuple[tf.keras.Model, tf.keras.Model, tf.keras.Model]:
+    def mnist_augmentation() -> Tuple[tf.keras.Model, tf.keras.Model, tf.keras.Model]:
         """Create the past/positive future/negative future augmentation models used to perturb MNIST digit sequences during training
 
         Past samples are augmented more mildly (rotation/zoom/translation factor 0.05) than future
@@ -163,8 +162,10 @@ class augmentation:
         return model_past, model_future_pos, model_future_neg
 
 class data:
+    """MNIST splits and successive-digit sequence datasets"""
 
     class MNIST:
+        """MNIST split (train, validation or test), with the images indexed by digit label"""
 
         def __init__(self, dataset: str, seed: int=0):
             """Load an MNIST split and index it by digit label
@@ -247,7 +248,7 @@ class data:
                 Np (int): number of past samples per sequence
                 Nf (int): number of future samples per sequence
                 Nchi (int): number of negative samples per future sample
-                augmentation (Optional[tf.keras.Model], optional): (past, positive future, negative future) augmentation models, as returned by augmentation.MNISTaugmentation. Defaults to None.
+                augmentation (Optional[tf.keras.Model], optional): (past, positive future, negative future) augmentation models, as returned by augmentation.mnist_augmentation. Defaults to None.
                 seed (int, optional): seed of this dataset's own random number generator, used to draw the sequences. Defaults to 0.
             """
 
@@ -379,6 +380,7 @@ class data:
             return dataset
 
 class colormaps:
+    """Colormaps for the figures"""
 
     def get_modified_oranges():
         """Get the matplotlib 'Oranges' colormap with its lowest value forced to white
@@ -388,7 +390,7 @@ class colormaps:
         """
 
         cmap = mpl.colormaps['Oranges']
-        
+
         cmap._segmentdata['red'][0, 1:]   = 1
         cmap._segmentdata['green'][0, 1:] = 1
         cmap._segmentdata['blue'][0, 1:]  = 1

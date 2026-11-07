@@ -4,10 +4,10 @@ import tensorflow as tf
 from . import probability, wrappers
 
 class Anomaly:
+    """Online anomaly detector: scores every segment of a sequence by its tail probability under the forecasts"""
 
     def __init__(self, encoder_model: tf.keras.Model, ar_model: tf.keras.Model, forecast_models: list[tf.keras.Model]):
-        """Init method for anomaly detection class.
-
+        """
         Args:
             encoder_model (tf.keras.Model): encoder model, [B, ...] -> [B, Ne]
             ar_model (tf.keras.Model): autoregressive model, [B, Np, Ne] -> [B, Np, Ng]. GRU/LSTM option return_sequences must be set to True.
@@ -20,16 +20,20 @@ class Anomaly:
         self.forecast_models = forecast_models
 
         # Create adapted models that can handle higher dimensionalities
-        self.encoder_model_td1 = wrappers.TimeDistributed(self.encoder_model)
+        self.encoder_model_td1 = wrappers.time_distributed(self.encoder_model)
 
     def __call__(self, samples: tf.Tensor) -> tf.Tensor:
-        """Call function for anomaly detection class.
+        """Compute the tail probability (probability of conformance) of every segment of the given sequences
+
+        Every window of Np segments is encoded and forecasts the next Nf segments. Segment t is then scored by
+        forecast model f using the window that ends at segment t-f-1.
 
         Args:
-            samples (tf.Tensor): samples, shape [B, Ns, ...]
+            samples (tf.Tensor): sequences of Ns segments, shape [B, Ns, ...]
 
         Returns:
-            tf.Tensor: Tail probabilities for every time step, forecast step and anomaly class, shape [B, Ns, Nf]
+            tf.Tensor: tail probabilities per segment and forecast step, shape [B, Ns, Nf]. Segments that are not
+                forecasted (the first Np+f segments for forecast step f) are NaN.
         """
 
         # Infer encodings
@@ -69,7 +73,7 @@ class Anomaly:
                 encodings_pred_local = encodings_pred[fmi, :, :-fmi, :, :] # [B, Ns-fmi-Np, Ne, 2]
 
             # Determine tail probabilities
-            probs = probability.MultiVariateGaussianTailProbability(encodings_true_local, encodings_pred_local) # [B, Ns-fmi-Np]
+            probs = probability.multivariate_gaussian_tail_probability(encodings_true_local, encodings_pred_local) # [B, Ns-fmi-Np]
 
             # Pad steps that are not forecasted with NaNs
             probs = tf.pad(probs, [[0, 0], [fmi+Np, 0]], constant_values=np.nan) # [B, Ns]

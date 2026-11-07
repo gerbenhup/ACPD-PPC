@@ -14,9 +14,11 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 
 class models:
+    """Encoder, decoder, autoregressive and forecast models"""
 
     def encoder_model(Ne: int, filters: int, L: int) -> tf.keras.Model:
-        """Create encoder model
+        """Create the encoder: two blocks of Conv1D (kernel size 3, ReLU), batch normalization and max pooling,
+        with filters and 2*filters channels, and a linear dense layer, [B, L, 1] -> [B, Ne]
 
         Args:
             Ne (int): size of encoding vector
@@ -45,7 +47,8 @@ class models:
         return model
 
     def decoder_model(L: int, Ne: int, filters: int) -> tf.keras.Model:
-        """Create decoder model
+        """Create the decoder, mirroring the encoder: a ReLU dense layer reshaped to [L/4, 2*filters], two blocks of
+        Conv1D (kernel size 3, ReLU) and upsampling, and a linear Conv1D output layer, [B, Ne] -> [B, L, 1]
 
         Args:
             L (int): length of signal segment
@@ -73,7 +76,7 @@ class models:
         return model
 
     def ar_model(Np: int, Ne: int, Ng: int) -> tf.keras.Model:
-        """Create autoregressive model
+        """Create the autoregressive model: a GRU with Ng units and linear activation, [B, Np, Ne] -> [B, Np, Ng]
 
         Args:
             Np (int): number of input encodings
@@ -91,7 +94,9 @@ class models:
         return model
 
     def forecast_model(Ng: int, Ne: int, dense_units: int) -> tf.keras.Model:
-        """Create forecast model
+        """Create a forecast model: six ReLU dense layers (dense_units, dense_units, 2*dense_units, 2*dense_units,
+        4*dense_units, 4*dense_units units) and linear output layers for the means and log standard deviations,
+        [B, Ng] -> [B, Ne, 2]
 
         Args:
             Ng (int): size of context vector
@@ -122,6 +127,7 @@ class models:
         return model
 
 class data:
+    """Sine wave signal generation and the datasets built from it"""
 
     def constrained_random_walk(lower_bounds: Union[list, np.ndarray], upper_bounds: Union[list, np.ndarray], change_rate: float, last_state: Optional[float]=None, dtype: np.dtype=np.float32) -> np.ndarray:
         """Generate a random walk constrained to a set of lower and upper bounds.
@@ -279,7 +285,7 @@ class data:
 
         return t, signal, signal_reshaped
 
-    class positive_sample_helper:
+    class PositiveSampleHelper:
         """Picklable callable that generates a single "positive" sample (no frequency change) for `Pool.imap`
 
         Stores the signal-generation parameters (see `data.generate_signal`) and, on each call, draws a
@@ -365,7 +371,7 @@ class data:
                 self.time_shift_range,
             )
 
-    class grid_sample_helper:
+    class GridSampleHelper:
         """Picklable callable that generates a single sample for a given (past, future) center-frequency pair
 
         Stores the signal-generation parameters (see `data.generate_signal`) and, on each call, generates a
@@ -530,7 +536,7 @@ class data:
                 map_func   = pool.imap
                 close_func = pool.close
 
-            generator = data.positive_sample_helper(
+            generator = data.PositiveSampleHelper(
                 Np,
                 Nf,
                 L,
@@ -646,7 +652,7 @@ class data:
             # Random number generator for drawing the center frequencies
             rng = np.random.RandomState(seed)
 
-            generator = data.grid_sample_helper(
+            generator = data.GridSampleHelper(
                 Np,
                 Nf,
                 L,
@@ -790,7 +796,7 @@ class data:
                 map_func   = pool.imap
                 close_func = pool.close
 
-            generator = data.grid_sample_helper(
+            generator = data.GridSampleHelper(
                 Np,
                 Nf,
                 L,
@@ -917,6 +923,7 @@ class data:
             return dataset
 
 class callbacks:
+    """Training-time callbacks"""
 
     class SineMonitor:
         """Training-time callback that periodically plots train/validation losses"""
@@ -985,6 +992,7 @@ class callbacks:
             return True
 
 class colormaps:
+    """Colormaps for the figures"""
 
     def get_modified_oranges():
         """Get the matplotlib 'Oranges' colormap with its lowest value forced to white
