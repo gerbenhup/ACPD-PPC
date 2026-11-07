@@ -26,33 +26,32 @@ if  __name__ == '__main__':
         batch_size           = 32,
         Ne                   = 16,
         Ng                   = 32,
-        encoder_filters      = 8,
+        encoder_filters      = 32,
         forecast_dense_units = 64,
     )
 
     print(settings)
 
     # Select save directory
-    save_dir = Path(__file__).parent.resolve() / 'models/model-001/'
+    save_dir = Path(__file__).parent.resolve() / 'models/{}'.format(hash(settings))
 
     # If the model does not exist, create and train it
     if not save_dir.exists():
 
-        ContrastiveSamples_inst = tools.data.ContrastiveSamples(Path(__file__).parent / 'data.h5')
+        save_dir.mkdir(parents=True, exist_ok=True)
+
+        ContrastiveSamples_inst     = tools.data.ContrastiveSamples(Path(__file__).parent / 'train_dataset.h5')
+        val_ContrastiveSamples_inst = tools.data.ContrastiveSamples(Path(__file__).parent / 'val_dataset.h5')
 
         # Create dataset instances
         dataset = tools.data.ContrastiveSamplesDataset(
             ContrastiveSamples_inst = ContrastiveSamples_inst,
-            dataset                 = 'train',
-            split                   = np.array([0.8, 0.1, 0.1]),
             batch_size              = settings.batch_size,
             seed                    = 0,
         )
 
         val_dataset = tools.data.ContrastiveSamplesDataset(
-            ContrastiveSamples_inst = ContrastiveSamples_inst,
-            dataset                 = 'val',
-            split                   = np.array([0.8, 0.1, 0.1]),
+            ContrastiveSamples_inst = val_ContrastiveSamples_inst,
             batch_size              = settings.batch_size,
             seed                    = 1,
         )
@@ -87,8 +86,8 @@ if  __name__ == '__main__':
             dataset            = dataset,
             val_dataset        = val_dataset,
             forecast_loss_func = PPC.losses.ContrastiveNLLRLoss(PPC.weights.Uniform(ContrastiveSamples_inst.Nf), warmup=True),
-            optimizer          = tf.keras.optimizers.Adam(learning_rate=1e-4),
-            iterations         = 5000,
+            optimizer          = tf.keras.optimizers.RMSprop(learning_rate=1e-4),
+            iterations         = 1000,
             callbacks          = [PPC.callbacks.TerminateOnNaN()],
         )
 
@@ -96,8 +95,8 @@ if  __name__ == '__main__':
             dataset            = dataset,
             val_dataset        = val_dataset,
             forecast_loss_func = PPC.losses.ContrastiveNLLRLoss(PPC.weights.Uniform(ContrastiveSamples_inst.Nf), warmup=False),
-            optimizer          = tf.keras.optimizers.Adam(learning_rate=1e-4),
-            callbacks          = [PPC.callbacks.TerminateOnNaN(), PPC.callbacks.EarlyStopping(monitor='val_forecast_loss', patience=10000)],
+            optimizer          = tf.keras.optimizers.RMSprop(learning_rate=1e-4),
+            callbacks          = [PPC.callbacks.TerminateOnNaN(), PPC.callbacks.RestoreOnEarlyStopping(monitor='val_forecast_loss', patience=10000, models=[encoder_model, ar_model] + forecast_models)],
         )
 
         # Save models
@@ -112,3 +111,4 @@ if  __name__ == '__main__':
         settings.save(save_dir / 'settings.json')
 
         ContrastiveSamples_inst.close()
+        val_ContrastiveSamples_inst.close()

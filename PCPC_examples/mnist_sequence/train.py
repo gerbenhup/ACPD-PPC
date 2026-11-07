@@ -22,25 +22,33 @@ if  __name__ == '__main__':
         memory_growth = True,
     )
 
+    batch_size           = 32
+    Ne                   = 16
+    Ng                   = Ne*2
+    encoder_filters      = 32
+    forecast_dense_units = Ng*2
+
     # Settings
     settings = PPC.tools.Settings(
-        batch_size           = 32,
+        batch_size           = batch_size,
         Np                   = 1,
         Nf                   = 1,
         Nchi                 = 9,
-        Ne                   = 16,
-        Ng                   = 16,
-        encoder_filters      = 64,
-        forecast_dense_units = 128,
+        Ne                   = Ne,
+        Ng                   = Ng,
+        encoder_filters      = encoder_filters,
+        forecast_dense_units = forecast_dense_units,
     )
 
     print(settings)
 
     # Select save directory
-    save_dir = Path(__file__).parent.resolve() / 'models/model-001/'
+    save_dir = Path(__file__).parent.resolve() / 'models/{}'.format(hash(settings))
 
     # If the model does not exist, create and train it
     if not save_dir.exists():
+
+        save_dir.mkdir(parents=True, exist_ok=True)
 
         # Create dataset instances
         MNIST_inst     = tools.data.MNIST('train')
@@ -96,8 +104,8 @@ if  __name__ == '__main__':
             dataset            = dataset,
             val_dataset        = val_dataset,
             forecast_loss_func = PPC.losses.ContrastiveNLLRLoss(PPC.weights.Uniform(settings.Nf), warmup=True),
-            optimizer          = tf.keras.optimizers.Adam(learning_rate=1e-4),
-            iterations         = 5000,
+            optimizer          = tf.keras.optimizers.RMSprop(learning_rate=1e-4),
+            iterations         = 1000,
             callbacks          = [PPC.callbacks.TerminateOnNaN()],
         )
 
@@ -105,8 +113,11 @@ if  __name__ == '__main__':
             dataset            = dataset,
             val_dataset        = val_dataset,
             forecast_loss_func = PPC.losses.ContrastiveNLLRLoss(PPC.weights.Uniform(settings.Nf), warmup=False),
-            optimizer          = tf.keras.optimizers.Adam(learning_rate=1e-4),
-            callbacks          = [PPC.callbacks.TerminateOnNaN(), PPC.callbacks.EarlyStopping(monitor='val_forecast_loss', patience=10000)],
+            optimizer          = tf.keras.optimizers.RMSprop(learning_rate=1e-4),
+            callbacks          = [
+                PPC.callbacks.TerminateOnNaN(),
+                PPC.callbacks.RestoreOnEarlyStopping(monitor='val_forecast_loss', patience=10000, models=[encoder_model, ar_model] + forecast_models),
+            ],
         )
 
         # Save models

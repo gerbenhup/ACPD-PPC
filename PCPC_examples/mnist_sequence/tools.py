@@ -23,10 +23,12 @@ class models:
 
         inputs = tf.keras.Input(image_shape + (1,))
 
-        x = tf.keras.layers.Conv2D(filters*2, kernel_size=3, padding='same', activation='relu')(inputs)
+        x = tf.keras.layers.Conv2D(filters, kernel_size=3, padding='same', activation='relu')(inputs)
+        x = tf.keras.layers.BatchNormalization()(x)
         x = tf.keras.layers.MaxPooling2D()(x)
 
-        x = tf.keras.layers.Conv2D(filters, kernel_size=3, padding='same', activation='relu')(x)
+        x = tf.keras.layers.Conv2D(filters*2, kernel_size=3, padding='same', activation='relu')(x)
+        x = tf.keras.layers.BatchNormalization()(x)
         x = tf.keras.layers.MaxPooling2D()(x)
 
         x = tf.keras.layers.Flatten()(x)
@@ -53,7 +55,7 @@ class models:
         model   = tf.keras.Model(inputs, outputs)
 
         return model
-
+    
     def forecast_model(Ng: int, Ne: int, dense_units: int) -> tf.keras.Model:
         """Create forecast model
 
@@ -66,25 +68,20 @@ class models:
             tf.keras.Model: TensorFlow forecast model
         """
 
+        # Smallest standard deviation for which the Gaussian likelihood of an Ne-dimensional encoding still fits in
+        # float32. PCPC needs this lower bound because the contrastive loss uses the likelihood itself (not only the
+        # log-likelihood), which would overflow for smaller standard deviations.
         sigma_min = float(1/(np.power(tf.float32.max, 1/Ne)*np.sqrt(2*np.pi)))
 
         inputs = tf.keras.Input((Ng,))
 
         x = tf.keras.layers.Dense(dense_units, activation='relu')(inputs)
-        x = tf.keras.layers.Dense(dense_units, activation='relu')(x)
         x = tf.keras.layers.Dense(dense_units*2, activation='relu')(x)
-        x = tf.keras.layers.Dense(dense_units*2, activation='relu')(x)
-        x = tf.keras.layers.Dense(dense_units*4, activation='relu')(x)
         x = tf.keras.layers.Dense(dense_units*4, activation='relu')(x)
 
         outputs_means = tf.keras.layers.Dense(Ne, activation='linear')(x)
         outputs_stds  = tf.keras.layers.Dense(Ne, activation='linear')(x)
-        # Note: sigma_min is the smallest standard deviation for which the Gaussian likelihood still fits in float32.
-        # It is applied to the log standard deviation y, before the exponent, so in effect the standard deviation is
-        # at least exp(sigma_min), i.e. about 1. Since PCPC has no decoder, the encoder is free to scale the latent
-        # space, and the contrastive loss and tail probabilities do not change under such a scaling, so this floor
-        # only fixes the scale of the latent space. Kept as is to match the trained models.
-        outputs_stds  = tf.keras.layers.Lambda(lambda y: PPC.math.exp(tf.math.maximum(y, sigma_min)), name='Exponential')(outputs_stds)
+        outputs_stds  = tf.keras.layers.Lambda(lambda y: tf.math.maximum(PPC.math.exp(y), sigma_min), name='Exponential')(outputs_stds)
 
         outputs = tf.keras.layers.Lambda(lambda x: tf.stack(x, axis=-1), name='Stack1D')([outputs_means, outputs_stds])
 

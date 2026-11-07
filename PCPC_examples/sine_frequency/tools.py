@@ -49,16 +49,12 @@ class models:
 
         inputs = tf.keras.Input((L, 1))
 
-        x = tf.keras.layers.Conv1D(filters*8, kernel_size=3, padding='same', activation='relu')(inputs)
-        x = tf.keras.layers.MaxPooling1D()(x)
-
-        x = tf.keras.layers.Conv1D(filters*4, kernel_size=3, padding='same', activation='relu')(x)
+        x = tf.keras.layers.Conv1D(filters, kernel_size=3, padding='same', activation='relu')(inputs)
+        x = tf.keras.layers.BatchNormalization()(x)
         x = tf.keras.layers.MaxPooling1D()(x)
 
         x = tf.keras.layers.Conv1D(filters*2, kernel_size=3, padding='same', activation='relu')(x)
-        x = tf.keras.layers.MaxPooling1D()(x)
-
-        x = tf.keras.layers.Conv1D(filters, kernel_size=3, padding='same', activation='relu')(x)
+        x = tf.keras.layers.BatchNormalization()(x)
         x = tf.keras.layers.MaxPooling1D()(x)
 
         x = tf.keras.layers.Flatten()(x)
@@ -98,6 +94,9 @@ class models:
             tf.keras.Model: TensorFlow forecast model
         """
 
+        # Smallest standard deviation for which the Gaussian likelihood of an Ne-dimensional encoding still fits in
+        # float32. PCPC needs this lower bound because the contrastive loss uses the likelihood itself (not only the
+        # log-likelihood), which would overflow for smaller standard deviations.
         sigma_min = float(1/(np.power(tf.float32.max, 1/Ne)*np.sqrt(2*np.pi)))
 
         inputs = tf.keras.Input((Ng,))
@@ -111,12 +110,7 @@ class models:
 
         outputs_means = tf.keras.layers.Dense(Ne, activation='linear')(x)
         outputs_stds  = tf.keras.layers.Dense(Ne, activation='linear')(x)
-        # Note: sigma_min is the smallest standard deviation for which the Gaussian likelihood still fits in float32.
-        # It is applied to the log standard deviation y, before the exponent, so in effect the standard deviation is
-        # at least exp(sigma_min), i.e. about 1. Since PCPC has no decoder, the encoder is free to scale the latent
-        # space, and the contrastive loss and tail probabilities do not change under such a scaling, so this floor
-        # only fixes the scale of the latent space. Kept as is to match the trained models.
-        outputs_stds  = tf.keras.layers.Lambda(lambda y: PPC.math.exp(tf.math.maximum(y, sigma_min)), name='Exponential')(outputs_stds)
+        outputs_stds  = tf.keras.layers.Lambda(lambda y: tf.math.maximum(PPC.math.exp(y), sigma_min), name='Exponential')(outputs_stds)
 
         outputs = tf.keras.layers.Lambda(lambda x: tf.stack(x, axis=-1), name='Stack1D')([outputs_means, outputs_stds])
 
@@ -544,7 +538,7 @@ class data:
     class ContrastiveSamples:
         """Collection of past, positive future and negative future signal segments, used for PCPC training
 
-        Backed by an HDF5 file. Because the full training file is large (~35 GB), it is not loaded into
+        Backed by an HDF5 file. Because the training file is large (~36 GB), it is not loaded into
         memory: batches are read from the open file. Use `ContrastiveSamples.create(...)` to generate a
         new HDF5 file, or the constructor to open an existing one.
         """
@@ -662,14 +656,12 @@ class data:
             self.handle.close()
 
     class ContrastiveSamplesDataset:
-        """tf.data-backed, batched, shuffled generator over one split of a `ContrastiveSamples` collection"""
+        """tf.data-backed, batched, shuffled generator over a `ContrastiveSamples` collection"""
 
-        def __init__(self, ContrastiveSamples_inst: 'data.ContrastiveSamples', dataset: str, split: np.ndarray, batch_size: int, seed: int=0):
+        def __init__(self, ContrastiveSamples_inst: 'data.ContrastiveSamples', batch_size: int, seed: int=0):
             """
             Args:
                 ContrastiveSamples_inst (data.ContrastiveSamples): opened contrastive samples collection to iterate over
-                dataset (str): which split to use, one of 'train', 'val', 'test'
-                split (np.ndarray): relative sizes of the train, validation and test splits. The split itself is always drawn with seed 0, so all splits are disjoint.
                 batch_size (int): batch size
                 seed (int, optional): seed of this dataset's own random number generator, used for shuffling sample order. Defaults to 0.
             """
@@ -677,62 +669,31 @@ class data:
             self.ContrastiveSamples_inst = ContrastiveSamples_inst
             self.batch_size              = batch_size
 
-            # Divide the samples into train, validation and test splits, with a fixed seed
-            num_samples = self.ContrastiveSamples_inst.past_data.shape[0]
-            split       = split / np.sum(split)
-            train_count = int(np.floor(split[0] * num_samples))
-            val_count   = int(np.floor(split[1] * num_samples))
-            test_count  = int(num_samples - train_count - val_count)
-
-            indexes = np.arange(num_samples, dtype=int)
-            np.random.RandomState(0).shuffle(indexes)
-
-            if dataset == 'train':
-                self.indexes = indexes[:train_count]
-            elif dataset == 'val':
-                self.indexes = indexes[train_count:-test_count]
-            elif dataset == 'test':
-                self.indexes = indexes[-test_count:]
-            else:
-                raise ValueError('dataset {} unknown'.format(dataset))
-
             # Own random number generator, so the sample order does not depend on other users of np.random
-            self.rng        = np.random.RandomState(seed)
-            self.choice_ind = 0
+            self.rng = np.random.RandomState(seed)
 
-        def choice(self) -> np.ndarray:
-            """Draw the indexes of the next batch, reshuffling once all samples of the split have been used
-
-            Returns:
-                np.ndarray: indexes of the next batch
-            """
-
-            if self.choice_ind > len(self.indexes) - self.batch_size:
-                self.rng.shuffle(self.indexes)
-                self.choice_ind = 0
-
-            inds = self.indexes[self.choice_ind:self.choice_ind+self.batch_size]
-            self.choice_ind += self.batch_size
-
-            return inds
+            self.inds = np.arange(self.ContrastiveSamples_inst.past_data.shape[0])
 
         def generator(self) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
-            """Endlessly yield batches of past, positive future and negative future segments
+            """Endlessly yield shuffled batches of past, positive future and negative future segments
 
             Yields:
                 Tuple[np.ndarray, np.ndarray, np.ndarray]: shapes [B, Np, L, 1], [B, Nf, L, 1] and [B, Nchi, Nf, L, 1]
             """
 
             while True:
+                self.rng.shuffle(self.inds)
 
-                # HDF5 requires increasing indexes
-                inds = np.sort(self.choice())
+                for i in range(int(len(self.inds)/self.batch_size)):
 
-                batch_past       = self.ContrastiveSamples_inst.past_data[inds]
-                batch_future_pos = self.ContrastiveSamples_inst.future_pos_data[inds]
-                batch_future_neg = self.ContrastiveSamples_inst.future_neg_data[inds]
+                    # HDF5 requires increasing indexes
+                    inds = np.sort(self.inds[i*self.batch_size:(i+1)*self.batch_size])
 
-                yield batch_past, batch_future_pos, batch_future_neg
+                    past_data       = self.ContrastiveSamples_inst.past_data[inds, ...]
+                    future_pos_data = self.ContrastiveSamples_inst.future_pos_data[inds, ...]
+                    future_neg_data = self.ContrastiveSamples_inst.future_neg_data[inds, ...]
+
+                    yield past_data, future_pos_data, future_neg_data
 
         def __iter__(self) -> Iterator:
             """Iterate over batches of the underlying tf.data.Dataset

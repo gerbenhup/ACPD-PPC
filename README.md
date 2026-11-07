@@ -104,17 +104,27 @@ detection metrics (best threshold selected on a validation split, evaluated on t
 of a reconstruction loss, the forecast distribution is trained contrastively
 (`PPC.losses.ContrastiveNLLRLoss`): the likelihood of the true future sample is maximized relative
 to the mean likelihood of `Nchi` negative samples. Models are trained by `PPC.trainers.PCPC` and
-saved to `models/model-001/`. As above, run the scripts from within each example's directory.
+saved to `models/<hash>/`. As above, run the scripts from within each example's directory.
 
-The PCPC examples follow the same structure as their PPC counterparts, and their `test.py` scripts
-are copies of the PPC ones (same figures, same metrics), so the results can be compared directly.
+The PCPC examples use the same settings as their PPC counterparts, so the results can be compared
+directly:
+
+- Same encoder, autoregressive and forecast models (PCPC has no decoder). The only difference is
+  that the PCPC forecast models bound the predicted standard deviation from below, because the
+  contrastive loss uses the likelihood itself, which would otherwise overflow in float32.
+- Same training procedure: RMSprop (learning rate 1e-4), 1000 warm-up iterations with unit
+  standard deviation, then training until the validation forecast loss has not improved for 10000
+  iterations, restoring the best weights.
+- Same data: training and validation samples from the same distributions and splits (PCPC adds 9
+  negative samples to each), identical test sets, and the same `test.py` (same figures and
+  metrics).
 
 ### `PCPC_examples/sine_frequency`
 
-The training data (`data.h5`, ~35 GB, 1,000,000 samples with 9 negative samples each) must be
-generated once before training; `train.py` splits it 80/10/10 into train, validation and test.
-`generate_datasets.py` also generates the test sets, with the same settings and seeds as the PPC
-sine experiment, so they are identical to the PPC test sets.
+Datasets must be generated once before training (~60 GB of `.h5` files): training and validation
+sets of 1,000,000 and 100,000 samples with 9 negative samples each, and the test sets. The test sets
+use the same settings and seeds as the PPC sine experiment, so they are identical to the PPC test
+sets.
 
 ```
 python generate_datasets.py
