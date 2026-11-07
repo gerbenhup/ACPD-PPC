@@ -14,6 +14,9 @@ venv/
 PPC_examples/*/models/
 PPC_examples/*/*.h5
 PPC_examples/*/*.pdf
+PCPC_examples/*/models/
+PCPC_examples/*/*.h5
+PCPC_examples/*/*.pdf
 
 # OS
 .DS_Store
