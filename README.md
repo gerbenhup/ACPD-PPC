@@ -148,9 +148,8 @@ All randomness is seeded:
   seeds are set with `tf.keras.utils.set_random_seed`, and
   `tf.config.experimental.enable_op_determinism()` makes TensorFlow operations deterministic, so
   rerunning `train.py` on the same hardware and software gives the same model. The exception is
-  `PPC_examples/mnist_sequence`: its `UpSampling2D` and `BatchNormalization` layers have no
-  deterministic GPU implementation, so there the determinism switch is off and reruns on a GPU can
-  differ slightly.
+  `PPC_examples/mnist_sequence`: the gradient of its `UpSampling2D` layers has no deterministic GPU
+  implementation, so there the determinism switch is off and reruns on a GPU can differ slightly.
 - Testing: the F1-optimal threshold search (`scipy.optimize.differential_evolution`) uses `seed=0`.
 
 ## Citation

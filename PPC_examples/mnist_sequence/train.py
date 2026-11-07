@@ -9,9 +9,8 @@ import numpy as np
 if  __name__ == '__main__':
 
     # Seed all random number generators. TensorFlow operations are not made deterministic here
-    # (tf.config.experimental.enable_op_determinism), because the decoder's UpSampling2D and the
-    # encoder's BatchNormalization have no deterministic GPU implementation, so reruns on a GPU can
-    # differ slightly.
+    # (tf.config.experimental.enable_op_determinism), because the gradient of the decoder's
+    # UpSampling2D has no deterministic GPU implementation, so reruns on a GPU can differ slightly.
     np.random.seed(0)
     tf.keras.utils.set_random_seed(0)
 

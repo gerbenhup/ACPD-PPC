@@ -138,23 +138,24 @@ class PPC:
             Tuple[float, float, float]: forecast loss, reconstruction loss and total loss
         """
 
+        # The models are called with training=True, so layers such as BatchNormalization use batch statistics and update their moving averages
         with tf.GradientTape() as tape:
 
             # Determine encodings for past and positive/negative future samples
-            encodings_past        = self.encoder_model_td1(samples_past)   # [B, Np, Ne]
-            encodings_future_true = self.encoder_model_td1(samples_future) # [B, Nf, Ne]
+            encodings_past        = self.encoder_model_td1(samples_past, training=True)   # [B, Np, Ne]
+            encodings_future_true = self.encoder_model_td1(samples_future, training=True) # [B, Nf, Ne]
 
             # Predict future samples
-            contexts_past         = self.ar_model(encodings_past)          # [B, Np, Ng]
-            context_past          = contexts_past[:, -1, :]                # [B, Ng]
-            encodings_future_pred = self.forecast_model_ts(context_past)   # [B, Nf, Ne, 2]
+            contexts_past         = self.ar_model(encodings_past, training=True)          # [B, Np, Ng]
+            context_past          = contexts_past[:, -1, :]                               # [B, Ng]
+            encodings_future_pred = self.forecast_model_ts(context_past, training=True)   # [B, Nf, Ne, 2]
 
             # Apply forecast loss function
             forecast_loss = forecast_loss_func(encodings_future_true, encodings_future_pred)
 
             # Decode encodings
-            decodings_past   = self.decoder_model_td1(encodings_past)
-            decodings_future = self.decoder_model_td1(encodings_future_true)
+            decodings_past   = self.decoder_model_td1(encodings_past, training=True)
+            decodings_future = self.decoder_model_td1(encodings_future_true, training=True)
 
             # Apply reconstruction loss function
             reconstruction_loss = reconstruction_loss_func(samples_past, decodings_past, samples_future, decodings_future)
@@ -182,20 +183,20 @@ class PPC:
         """
 
         # Determine encodings for past and positive/negative future samples
-        encodings_past        = self.encoder_model_td1(samples_past)   # [B, Np, Ne]
-        encodings_future_true = self.encoder_model_td1(samples_future) # [B, Nf, Ne]
+        encodings_past        = self.encoder_model_td1(samples_past, training=False)   # [B, Np, Ne]
+        encodings_future_true = self.encoder_model_td1(samples_future, training=False) # [B, Nf, Ne]
 
         # Predict future samples
-        contexts_past         = self.ar_model(encodings_past)          # [B, Np, Ng]
-        context_past          = contexts_past[:, -1, :]                # [B, Ng]
-        encodings_future_pred = self.forecast_model_ts(context_past)   # [B, Nf, Ne, 2]
+        contexts_past         = self.ar_model(encodings_past, training=False)          # [B, Np, Ng]
+        context_past          = contexts_past[:, -1, :]                                # [B, Ng]
+        encodings_future_pred = self.forecast_model_ts(context_past, training=False)   # [B, Nf, Ne, 2]
 
         # Apply forecast loss function
         forecast_loss = forecast_loss_func(encodings_future_true, encodings_future_pred)
 
         # Decode encodings
-        decodings_past   = self.decoder_model_td1(encodings_past)
-        decodings_future = self.decoder_model_td1(encodings_future_true)
+        decodings_past   = self.decoder_model_td1(encodings_past, training=False)
+        decodings_future = self.decoder_model_td1(encodings_future_true, training=False)
 
         # Apply reconstruction loss function
         reconstruction_loss = reconstruction_loss_func(samples_past, decodings_past, samples_future, decodings_future)
@@ -314,17 +315,18 @@ class PCPC:
             float: forecast loss
         """
 
+        # The models are called with training=True, so layers such as BatchNormalization use batch statistics and update their moving averages
         with tf.GradientTape() as tape:
 
             # Determine encodings for past and positive/negative future samples
-            encodings_past        = self.encoder_model_td1(samples_past)       # [B, Np, Ne]
-            encodings_future_pos  = self.encoder_model_td1(samples_future_pos) # [B, Nf, Ne]
-            encodings_future_neg  = self.encoder_model_td2(samples_future_neg) # [B, Nchi, Nf, Ne]
+            encodings_past        = self.encoder_model_td1(samples_past, training=True)       # [B, Np, Ne]
+            encodings_future_pos  = self.encoder_model_td1(samples_future_pos, training=True) # [B, Nf, Ne]
+            encodings_future_neg  = self.encoder_model_td2(samples_future_neg, training=True) # [B, Nchi, Nf, Ne]
 
             # Predict future samples
-            contexts_past         = self.ar_model(encodings_past)              # [B, Np, Ng]
-            context_past          = contexts_past[:, -1, :]                    # [B, Ng]
-            encodings_future_pred = self.forecast_model_ts(context_past)       # [B, Nf, Ne, 2]
+            contexts_past         = self.ar_model(encodings_past, training=True)              # [B, Np, Ng]
+            context_past          = contexts_past[:, -1, :]                                   # [B, Ng]
+            encodings_future_pred = self.forecast_model_ts(context_past, training=True)       # [B, Nf, Ne, 2]
 
             # Apply loss function
             forecast_loss = forecast_loss_func(encodings_future_pos, encodings_future_neg, encodings_future_pred)
@@ -349,14 +351,14 @@ class PCPC:
         """
 
         # Determine encodings for past and positive/negative future samples
-        encodings_past        = self.encoder_model_td1(samples_past)       # [B, Np, Ne]
-        encodings_future_pos  = self.encoder_model_td1(samples_future_pos) # [B, Nf, Ne]
-        encodings_future_neg  = self.encoder_model_td2(samples_future_neg) # [B, Nchi, Nf, Ne]
+        encodings_past        = self.encoder_model_td1(samples_past, training=False)       # [B, Np, Ne]
+        encodings_future_pos  = self.encoder_model_td1(samples_future_pos, training=False) # [B, Nf, Ne]
+        encodings_future_neg  = self.encoder_model_td2(samples_future_neg, training=False) # [B, Nchi, Nf, Ne]
 
         # Predict future samples
-        contexts_past         = self.ar_model(encodings_past)              # [B, Np, Ng]
-        context_past          = contexts_past[:, -1, :]                    # [B, Ng]
-        encodings_future_pred = self.forecast_model_ts(context_past)       # [B, Nf, Ne, 2]
+        contexts_past         = self.ar_model(encodings_past, training=False)              # [B, Np, Ng]
+        context_past          = contexts_past[:, -1, :]                                    # [B, Ng]
+        encodings_future_pred = self.forecast_model_ts(context_past, training=False)       # [B, Nf, Ne, 2]
 
         # Apply loss function
         forecast_loss = forecast_loss_func(encodings_future_pos, encodings_future_neg, encodings_future_pred)
