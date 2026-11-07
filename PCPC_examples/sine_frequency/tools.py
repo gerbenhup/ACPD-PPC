@@ -318,6 +318,94 @@ class data:
 
         return signal_reshaped
 
+    class grid_sample_helper:
+        """Picklable callable that generates a single sample for a given (past, future) center-frequency pair
+
+        Stores the signal-generation parameters (see `data.generate_signal`) and, on each call, generates a
+        signal whose past/future center frequencies are given explicitly, allowing a systematic sweep over
+        the frequency grid (used for both the grid-based test set and the labelled positive/negative sets).
+        """
+
+        def __init__(
+            self,
+            Np: int,
+            Nf: int,
+            L: int,
+            fs: int,
+            fr: Tuple[float, float],
+            fb: float,
+            freq_change_rate: float,
+            baseline_wander_range: Tuple[float, float],
+            baseline_wander_fc: float,
+            baseline_wander_change_rate: float,
+            amplitude_range: Tuple[float, float],
+            amplitude_fc: float,
+            amplitude_change_rate: float,
+            noise_std_range: Tuple[float, float],
+            time_shift_range: Tuple[float, float],
+            seed: int,
+        ):
+            """Store the signal-generation parameters passed through to `data.generate_signal` on each call
+
+            Args:
+                fr (Tuple[float, float]): overall frequency range (unused directly, kept for interface parity)
+                seed (int): seed of the dataset; sample i is generated with seed (seed, i)
+                (all other args): see `data.generate_signal`
+            """
+
+            self.Np                          = Np
+            self.Nf                          = Nf
+            self.L                           = L
+            self.fs                          = fs
+            self.fr                          = fr
+            self.fb                          = fb
+            self.freq_change_rate            = freq_change_rate
+            self.baseline_wander_range       = baseline_wander_range
+            self.baseline_wander_fc          = baseline_wander_fc
+            self.baseline_wander_change_rate = baseline_wander_change_rate
+            self.amplitude_range             = amplitude_range
+            self.amplitude_fc                = amplitude_fc
+            self.amplitude_change_rate       = amplitude_change_rate
+            self.noise_std_range             = noise_std_range
+            self.time_shift_range            = time_shift_range
+            self.seed                        = seed
+
+        def __call__(self, task: Tuple[int, Tuple[float, float]]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+            """Generate one sample for the given explicit (past, future) center-frequency pair
+
+            Args:
+                task (Tuple[int, Tuple[float, float]]): (sample index, (past center frequency, future center frequency)). The index seeds the generation of the sample.
+
+            Returns:
+                Tuple[np.ndarray, np.ndarray, np.ndarray]: time vector, flat signal, and signal reshaped into (Np+Nf, L, 1) segments
+            """
+
+            index, (f_center_past, f_center_future) = task
+
+            # Seed per sample, so the dataset is reproducible regardless of which worker generates which sample
+            np.random.seed([self.seed, index])
+
+            t, signal, signal_reshaped = data.generate_signal(
+                f_center_past               = f_center_past,
+                f_center_future             = f_center_future,
+                L                           = self.L,
+                time_shift_range            = self.time_shift_range,
+                noise_std_range             = self.noise_std_range,
+                fb                          = self.fb,
+                Np                          = self.Np,
+                Nf                          = self.Nf,
+                freq_change_rate            = self.freq_change_rate,
+                baseline_wander_range       = self.baseline_wander_range,
+                baseline_wander_fc          = self.baseline_wander_fc,
+                baseline_wander_change_rate = self.baseline_wander_change_rate,
+                amplitude_range             = self.amplitude_range,
+                amplitude_fc                = self.amplitude_fc,
+                amplitude_change_rate       = self.amplitude_change_rate,
+                fs                          = self.fs,
+            )
+
+            return t, signal, signal_reshaped[0]
+
     class contrastive_sample_helper:
         """Picklable callable that generates a single PCPC sample for `Pool.imap`
 
@@ -686,27 +774,37 @@ class data:
     class GridSamples:
         """Collection of signal segments generated over a systematic grid of past/future center frequencies
 
-        Loads the test set of the PPC sine experiment, as created by PPC_examples/sine_frequency/generate_datasets.py,
-        so PPC and PCPC are evaluated on exactly the same samples.
+        Backed by an HDF5 file; used for the test-set log-likelihood/probability heatmap and example-signal
+        figures. Use `GridSamples.create(...)` to generate a new HDF5 file, or the constructor to load an
+        existing one.
         """
 
         def __init__(self, path: Path):
             """Load a grid-samples collection from an existing HDF5 file
 
             Args:
-                path (Path): HDF5 file, as created by `GridSamples.create(...)` in PPC_examples/sine_frequency/tools.py
+                path (Path): HDF5 file, as created by `GridSamples.create(...)`
             """
 
             with h5py.File(path, 'r') as hf:
-                self.data       = hf['collection'][:]
-                self.gridsize   = hf['collection'].attrs.get('gridsize')
-                self.iterations = hf['collection'].attrs.get('iterations')
-                self.Np         = hf['collection'].attrs.get('Np')
-                self.Nf         = hf['collection'].attrs.get('Nf')
-                self.L          = hf['collection'].attrs.get('L')
-                self.fs         = hf['collection'].attrs.get('fs')
-                self.fr         = hf['collection'].attrs.get('fr')
-                self.fb         = hf['collection'].attrs.get('fb')
+                self.data                        = hf['collection'][:]
+                self.gridsize                    = hf['collection'].attrs.get('gridsize')
+                self.iterations                  = hf['collection'].attrs.get('iterations')
+                self.Np                          = hf['collection'].attrs.get('Np')
+                self.Nf                          = hf['collection'].attrs.get('Nf')
+                self.L                           = hf['collection'].attrs.get('L')
+                self.fs                          = hf['collection'].attrs.get('fs')
+                self.fr                          = hf['collection'].attrs.get('fr')
+                self.fb                          = hf['collection'].attrs.get('fb')
+                self.freq_change_rate            = hf['collection'].attrs.get('freq_change_rate')
+                self.baseline_wander_range       = hf['collection'].attrs.get('baseline_wander_range')
+                self.baseline_wander_fc          = hf['collection'].attrs.get('baseline_wander_fc')
+                self.baseline_wander_change_rate = hf['collection'].attrs.get('baseline_wander_change_rate')
+                self.amplitude_range             = hf['collection'].attrs.get('amplitude_range')
+                self.amplitude_fc                = hf['collection'].attrs.get('amplitude_fc')
+                self.amplitude_change_rate       = hf['collection'].attrs.get('amplitude_change_rate')
+                self.noise_std_range             = hf['collection'].attrs.get('noise_std_range')
+                self.time_shift_range            = hf['collection'].attrs.get('time_shift_range')
 
             self.flat_data   = np.reshape(self.data, (self.data.shape[0], self.data.shape[1]*self.data.shape[2], self.data.shape[3]))
             self.past_data   = self.data[:, :self.Np, ...]
@@ -716,18 +814,121 @@ class data:
             self.f_center_past   = np.repeat(np.repeat(self.grid, len(self.grid)), self.iterations)
             self.f_center_future = np.repeat(np.tile(self.grid, len(self.grid)), self.iterations)
 
+        def create(
+            path: Path,
+            gridsize: int,
+            iterations: int,
+            Np: int,
+            Nf: int,
+            L: int,
+            fs: int,
+            fr: Tuple[float, float],
+            fb: float,
+            freq_change_rate: float,
+            baseline_wander_range: Tuple[float, float],
+            baseline_wander_fc: float,
+            baseline_wander_change_rate: float,
+            amplitude_range: Tuple[float, float],
+            amplitude_fc: float,
+            amplitude_change_rate: float,
+            noise_std_range: Tuple[float, float],
+            time_shift_range: Tuple[float, float],
+            workers: int=1,
+            seed: int=0,
+        ) -> 'data.GridSamples':
+            """Generate samples over a `gridsize` x `gridsize` grid of past/future center frequencies and save them
+
+            For each of the `gridsize**2` (past, future) frequency combinations, `iterations` independent
+            samples are generated (to average out noise/wander randomness at evaluation time).
+
+            Args:
+                path (Path): HDF5 file to write
+                gridsize (int): number of distinct center frequencies per axis
+                iterations (int): number of independent samples generated per grid point
+                workers (int, optional): number of worker processes to generate samples in parallel. Defaults to 1.
+                seed (int, optional): seed of the dataset; sample i is generated with seed (seed, i). Defaults to 0.
+                (all other args): see `data.generate_signal`
+
+            Returns:
+                data.GridSamples: the generated collection, loaded from the newly written file
+            """
+
+            if workers == 1:
+                map_func   = map
+                close_func = lambda: None
+            elif workers > 1:
+                pool       = Pool(workers)
+                map_func   = pool.imap
+                close_func = pool.close
+
+            generator = data.grid_sample_helper(
+                Np,
+                Nf,
+                L,
+                fs,
+                fr,
+                fb,
+                freq_change_rate,
+                baseline_wander_range,
+                baseline_wander_fc,
+                baseline_wander_change_rate,
+                amplitude_range,
+                amplitude_fc,
+                amplitude_change_rate,
+                noise_std_range,
+                time_shift_range,
+                seed,
+            )
+
+            grid        = np.linspace(fr[0]+0.5*fb, fr[1]-0.5*fb, gridsize, endpoint=True)
+            grid_past   = np.repeat(grid, len(grid))
+            grid_future = np.tile(grid, len(grid))
+            grid_past   = np.repeat(grid_past, iterations)
+            grid_future = np.repeat(grid_future, iterations)
+            tasks       = np.stack([grid_past, grid_future], axis=1)
+
+            collection = []
+            for _, _, signals_reshaped in tqdm(map_func(generator, enumerate(tasks)), total=len(tasks)):
+                collection.append(signals_reshaped)
+            collection = np.stack(collection, axis=0)
+
+            close_func()
+
+            with h5py.File(path, 'w') as hf:
+                hf.create_dataset('collection', data=collection)
+                hf['collection'].attrs.create('gridsize', data=gridsize)
+                hf['collection'].attrs.create('iterations', data=iterations)
+                hf['collection'].attrs.create('Np', data=Np)
+                hf['collection'].attrs.create('Nf', data=Nf)
+                hf['collection'].attrs.create('L', data=L)
+                hf['collection'].attrs.create('fs', data=fs)
+                hf['collection'].attrs.create('fr', data=fr)
+                hf['collection'].attrs.create('fb', data=fb)
+                hf['collection'].attrs.create('freq_change_rate', data= freq_change_rate)
+                hf['collection'].attrs.create('baseline_wander_range', data=baseline_wander_range)
+                hf['collection'].attrs.create('baseline_wander_fc', data=baseline_wander_fc)
+                hf['collection'].attrs.create('baseline_wander_change_rate', data=baseline_wander_change_rate)
+                hf['collection'].attrs.create('amplitude_range', data=amplitude_range)
+                hf['collection'].attrs.create('amplitude_fc', data=amplitude_fc)
+                hf['collection'].attrs.create('amplitude_change_rate', data=amplitude_change_rate)
+                hf['collection'].attrs.create('noise_std_range', data=noise_std_range)
+                hf['collection'].attrs.create('time_shift_range', data=time_shift_range)
+
+            return data.GridSamples(path)
+
     class PositiveNegativeSamples:
         """Labelled collection of conforming ("positive") and frequency-changed ("negative") signal segments
 
-        Loads the metric sets of the PPC sine experiment, as created by PPC_examples/sine_frequency/generate_datasets.py,
-        so PPC and PCPC are evaluated on exactly the same samples.
+        Backed by an HDF5 file; used for anomaly-detection metric evaluation (ROC/PRC, threshold search).
+        Use `PositiveNegativeSamples.create(...)` to generate a new HDF5 file, or the constructor to load
+        an existing one.
         """
 
         def __init__(self, path: Path):
             """Load a labelled positive/negative samples collection from an existing HDF5 file
 
             Args:
-                path (Path): HDF5 file, as created by `PositiveNegativeSamples.create(...)` in PPC_examples/sine_frequency/tools.py
+                path (Path): HDF5 file, as created by `PositiveNegativeSamples.create(...)`
             """
 
             with h5py.File(path, 'r') as hf:
@@ -736,6 +937,108 @@ class data:
 
             self.samples        = np.concatenate([self.pos_samples, self.neg_samples], axis=0)
             self.anomaly_labels = np.concatenate([np.zeros(len(self.pos_samples)), np.ones(len(self.neg_samples))])
+
+        def create(
+            path: Path,
+            num_pos: int,
+            Np: int,
+            Nf: int,
+            L: int,
+            fs: int,
+            fr: Tuple[float, float],
+            fb: float,
+            freq_change_rate: float,
+            baseline_wander_range: Tuple[float, float],
+            baseline_wander_fc: float,
+            baseline_wander_change_rate: float,
+            amplitude_range: Tuple[float, float],
+            amplitude_fc: float,
+            amplitude_change_rate: float,
+            noise_std_range: Tuple[float, float],
+            time_shift_range: Tuple[float, float],
+            workers: int=1,
+            seed: int=0,
+        ) -> 'data.PositiveNegativeSamples':
+            """Generate `num_pos` positive and `num_pos` negative samples and save them to an HDF5 file
+
+            Positive samples share the same center frequency across the segment boundary; negative samples
+            have a different (randomly redrawn) center frequency after the boundary.
+
+            Args:
+                path (Path): HDF5 file to write
+                num_pos (int): number of positive (and, symmetrically, negative) samples to generate
+                workers (int, optional): number of worker processes to generate samples in parallel. Defaults to 1.
+                seed (int, optional): seed of the dataset. The frequencies are drawn with this seed, and sample i is generated with seed (seed, i), counting the negative samples after the positive ones. Defaults to 0.
+                (all other args): see `data.generate_signal`
+
+            Returns:
+                data.PositiveNegativeSamples: the generated collection, loaded from the newly written file
+            """
+
+            if workers == 1:
+                map_func   = map
+                close_func = lambda: None
+            elif workers > 1:
+                pool       = Pool(workers)
+                map_func   = pool.imap
+                close_func = pool.close
+
+            # Random number generator for drawing the center frequencies
+            rng = np.random.RandomState(seed)
+
+            generator = data.grid_sample_helper(
+                Np,
+                Nf,
+                L,
+                fs,
+                fr,
+                fb,
+                freq_change_rate,
+                baseline_wander_range,
+                baseline_wander_fc,
+                baseline_wander_change_rate,
+                amplitude_range,
+                amplitude_fc,
+                amplitude_change_rate,
+                noise_std_range,
+                time_shift_range,
+                seed,
+            )
+
+            # Generate positive samples
+            fcs         = rng.uniform(fr[0]+0.5*fb, fr[1]-0.5*fb, num_pos)
+            tasks       = np.stack([fcs, fcs], axis=1)
+
+            pos_samples = []
+            for _, _, signals_reshaped in tqdm(map_func(generator, enumerate(tasks)), total=len(tasks)):
+                pos_samples.append(signals_reshaped)
+            pos_samples = np.stack(pos_samples, axis=0)
+
+            # Generate negative samples
+            fcs_past   = rng.uniform(fr[0]+0.5*fb, fr[1]-0.5*fb, num_pos)
+            fcs_future = np.empty_like(fcs_past)
+
+            for i in range(len(fcs_past)):
+                while True:
+                    fcs_future_candidate = rng.uniform(fr[0]+0.5*fb, fr[1]-0.5*fb)
+                    if fcs_future_candidate != fcs_past[i]:
+                        fcs_future[i] = fcs_future_candidate
+                        break
+
+            tasks = np.stack([fcs_past, fcs_future], axis=1)
+
+            neg_samples = []
+            for _, _, signals_reshaped in tqdm(map_func(generator, enumerate(tasks, start=num_pos)), total=len(tasks)):
+                neg_samples.append(signals_reshaped)
+            neg_samples = np.stack(neg_samples, axis=0)
+
+            close_func()
+
+            with h5py.File(path, 'w') as hf:
+                hf.create_dataset('pos_samples', data=pos_samples)
+                hf.create_dataset('neg_samples', data=neg_samples)
+
+            return data.PositiveNegativeSamples(path)
 
 class colormaps:
 

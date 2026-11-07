@@ -113,8 +113,8 @@ are copies of the PPC ones (same figures, same metrics), so the results can be c
 
 The training data (`data.h5`, ~35 GB, 1,000,000 samples with 9 negative samples each) must be
 generated once before training; `train.py` splits it 80/10/10 into train, validation and test.
-`test.py` evaluates on the test sets of the PPC sine experiment, so generate those first with
-`PPC_examples/sine_frequency/generate_datasets.py`.
+`generate_datasets.py` also generates the test sets, with the same settings and seeds as the PPC
+sine experiment, so they are identical to the PPC test sets.
 
 ```
 python generate_datasets.py
