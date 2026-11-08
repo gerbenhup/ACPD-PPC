@@ -238,7 +238,7 @@ class PCPC:
         Args:
             dataset (tf.data.Dataset): train dataset, yielding (past samples [B, Np, ...], positive future samples [B, Nf, ...], negative future samples [B, Nchi, Nf, ...])
             val_dataset (tf.data.Dataset): validation dataset, yielding batches like `dataset`
-            forecast_loss_func (Callable): contrastive forecast loss, e.g. losses.ContrastiveNLLRLoss
+            forecast_loss_func (Callable): contrastive forecast loss, e.g. losses.LogisticContrastiveLoss
             optimizer (tf.keras.optimizers.Optimizer): optimizer
             callbacks (Optional[List[Callable]], optional): called every iteration with the train losses and the moving-average validation losses as keyword arguments; returning False stops training. Defaults to None.
             iterations (Optional[int], optional): number of iterations to train; None trains until a callback stops training. Defaults to None.

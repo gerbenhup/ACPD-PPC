@@ -106,7 +106,7 @@ if  __name__ == '__main__':
         trainer.train(
             dataset            = dataset,
             val_dataset        = val_dataset,
-            forecast_loss_func = PPC.losses.ContrastiveNLLRLoss(PPC.weights.uniform(settings.Nf), warmup=True),
+            forecast_loss_func = PPC.losses.LogisticContrastiveLoss(PPC.weights.uniform(settings.Nf), warmup=True),
             optimizer          = tf.keras.optimizers.RMSprop(learning_rate=settings.learning_rate),
             iterations         = settings.warmup_iterations,
             callbacks          = [PPC.callbacks.TerminateOnNaN()],
@@ -115,7 +115,7 @@ if  __name__ == '__main__':
         trainer.train(
             dataset            = dataset,
             val_dataset        = val_dataset,
-            forecast_loss_func = PPC.losses.ContrastiveNLLRLoss(PPC.weights.uniform(settings.Nf), warmup=False),
+            forecast_loss_func = PPC.losses.LogisticContrastiveLoss(PPC.weights.uniform(settings.Nf), warmup=False),
             optimizer          = tf.keras.optimizers.RMSprop(learning_rate=settings.learning_rate),
             callbacks          = [
                 PPC.callbacks.TerminateOnNaN(),

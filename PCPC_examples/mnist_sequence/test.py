@@ -11,13 +11,15 @@ import sklearn.metrics
 import scipy.stats
 from tqdm import tqdm
 
-def compute_matrices(MNIST_inst, encoder_model, ar_model, forecast_models, batch_size):
+def compute_matrices(MNIST_inst, encoder_model, ar_model, forecast_models, batch_size, std_scale=1.0):
     """Compute per-image encodings/forecasts and the resulting pairwise log-likelihood,
-    tail-probability, squared Mahalanobis distance and successive-digit truth matrices for a MNIST split."""
+    tail-probability, squared Mahalanobis distance and successive-digit truth matrices for a MNIST split.
+    The predicted standard deviations are multiplied by std_scale."""
 
     encodings             = encoder_model.predict(MNIST_inst.dataset_with_labels[0], batch_size=batch_size, verbose=1)
     contexts              = ar_model.predict(tf.expand_dims(encodings, axis=1), batch_size=batch_size, verbose=1)[:, 0, :]
     encodings_future_pred = forecast_models[0].predict(contexts, batch_size=batch_size, verbose=1)
+    encodings_future_pred[..., 1] *= std_scale
 
     n = len(MNIST_inst.dataset_with_labels[0])
     loglikelihoods = np.empty((n, n), dtype=np.float32)
@@ -66,8 +68,15 @@ if  __name__ == '__main__':
         _, _, _, _, val_distances, val_truth = compute_matrices(
             val_MNIST_inst, encoder_model, ar_model, forecast_models, settings.batch_size,
         )
+
+        # Calibrate the predicted standard deviations with one scalar: the maximum likelihood scale on the positive
+        # validation samples, for which the squared Mahalanobis distances then have mean Ne, as for a chi-squared distribution
+        std_scale     = np.sqrt(np.mean(val_distances[val_truth]) / settings.Ne)
+        val_distances = val_distances / std_scale**2
+        print('Standard deviation scale: {:.3e}'.format(std_scale))
+
         test_encodings, test_encodings_future_pred, test_loglikelihoods, test_probabilities, test_distances, test_truth = compute_matrices(
-            test_MNIST_inst, encoder_model, ar_model, forecast_models, settings.batch_size,
+            test_MNIST_inst, encoder_model, ar_model, forecast_models, settings.batch_size, std_scale,
         )
 
         # Figure 6: average log-likelihood / probability of conformance per digit pair (test set)

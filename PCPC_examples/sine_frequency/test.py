@@ -78,6 +78,36 @@ if  __name__ == '__main__':
         plt.savefig(save_dir / 'sine-examples.pdf', transparent=True)
         plt.close()
 
+        # Generate encodings for the labelled val/test anomaly-detection sets
+        val_encodings_past  = encoder_model_td1.predict(val_data_inst.samples[:, :test_GridSamples_inst.Np, :, :], batch_size=settings.batch_size, verbose=1)
+        test_encodings_past = encoder_model_td1.predict(test_data_inst.samples[:, :test_GridSamples_inst.Np, :, :], batch_size=settings.batch_size, verbose=1)
+
+        val_encodings_future_true  = encoder_model_td1.predict(val_data_inst.samples[:, test_GridSamples_inst.Np:, :, :], batch_size=settings.batch_size, verbose=1)
+        test_encodings_future_true = encoder_model_td1.predict(test_data_inst.samples[:, test_GridSamples_inst.Np:, :, :], batch_size=settings.batch_size, verbose=1)
+
+        val_context_past  = ar_model.predict(val_encodings_past, batch_size=settings.batch_size, verbose=1)[:, -1, :]
+        test_context_past = ar_model.predict(test_encodings_past, batch_size=settings.batch_size, verbose=1)[:, -1, :]
+
+        val_encodings_future_pred  = forecast_model_ts(val_context_past)
+        test_encodings_future_pred = forecast_model_ts(test_context_past)
+
+        val_encodings_future_true  = val_encodings_future_true[:, 0, :]
+        test_encodings_future_true = test_encodings_future_true[:, 0, :]
+
+        val_encodings_future_pred  = val_encodings_future_pred[:, 0, :]
+        test_encodings_future_pred = test_encodings_future_pred[:, 0, :]
+
+        val_y_true  = val_data_inst.anomaly_labels.astype(bool)
+        test_y_true = test_data_inst.anomaly_labels.astype(bool)
+
+        # Calibrate the predicted standard deviations with one scalar: the maximum likelihood scale on the positive
+        # validation samples, for which the squared Mahalanobis distances then have mean Ne, as for a chi-squared distribution
+        val_distances_pos          = PPC.probability.squared_mahalanobis_distance(tf.boolean_mask(val_encodings_future_true, ~val_y_true), tf.boolean_mask(val_encodings_future_pred, ~val_y_true))
+        std_scale                  = float(np.sqrt(np.mean(val_distances_pos) / settings.Ne))
+        val_encodings_future_pred  = val_encodings_future_pred * [1.0, std_scale]
+        test_encodings_future_pred = test_encodings_future_pred * [1.0, std_scale]
+        print('Standard deviation scale: {:.3e}'.format(std_scale))
+
         # Generate encodings over the frequency grid
         encodings_past        = encoder_model_td1.predict(test_GridSamples_inst.past_data, batch_size=settings.batch_size, verbose=1)
         encodings_future_true = encoder_model_td1.predict(test_GridSamples_inst.future_data, batch_size=settings.batch_size, verbose=1)
@@ -86,7 +116,7 @@ if  __name__ == '__main__':
         encodings_future_pred = forecast_model_ts(context_past)
 
         encodings_future_true = encodings_future_true[:, 0, :]
-        encodings_future_pred = encodings_future_pred[:, 0, :]
+        encodings_future_pred = encodings_future_pred[:, 0, :] * [1.0, std_scale]
 
         loglikelihoods = PPC.probability.gaussian_log_likelihood(encodings_future_true, encodings_future_pred)
         probabilities  = PPC.probability.multivariate_gaussian_tail_probability(encodings_future_true, encodings_future_pred)
@@ -129,28 +159,6 @@ if  __name__ == '__main__':
         plt.tight_layout()
         plt.savefig(save_dir / 'sine-matrix.pdf', transparent=False)
         plt.close()
-
-        # Generate encodings for the labelled val/test anomaly-detection sets
-        val_encodings_past  = encoder_model_td1.predict(val_data_inst.samples[:, :test_GridSamples_inst.Np, :, :], batch_size=settings.batch_size, verbose=1)
-        test_encodings_past = encoder_model_td1.predict(test_data_inst.samples[:, :test_GridSamples_inst.Np, :, :], batch_size=settings.batch_size, verbose=1)
-
-        val_encodings_future_true  = encoder_model_td1.predict(val_data_inst.samples[:, test_GridSamples_inst.Np:, :, :], batch_size=settings.batch_size, verbose=1)
-        test_encodings_future_true = encoder_model_td1.predict(test_data_inst.samples[:, test_GridSamples_inst.Np:, :, :], batch_size=settings.batch_size, verbose=1)
-
-        val_context_past  = ar_model.predict(val_encodings_past, batch_size=settings.batch_size, verbose=1)[:, -1, :]
-        test_context_past = ar_model.predict(test_encodings_past, batch_size=settings.batch_size, verbose=1)[:, -1, :]
-
-        val_encodings_future_pred  = forecast_model_ts(val_context_past)
-        test_encodings_future_pred = forecast_model_ts(test_context_past)
-
-        val_encodings_future_true  = val_encodings_future_true[:, 0, :]
-        test_encodings_future_true = test_encodings_future_true[:, 0, :]
-
-        val_encodings_future_pred  = val_encodings_future_pred[:, 0, :]
-        test_encodings_future_pred = test_encodings_future_pred[:, 0, :]
-
-        val_y_true  = val_data_inst.anomaly_labels.astype(bool)
-        test_y_true = test_data_inst.anomaly_labels.astype(bool)
 
         # Anomaly score: squared Mahalanobis distance (unlike the tail probability, it does not saturate)
         val_y_pred  = np.array(PPC.probability.squared_mahalanobis_distance(val_encodings_future_true, val_encodings_future_pred))
