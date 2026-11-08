@@ -172,7 +172,8 @@ def multivariate_gaussian_tail_probability(encodings_true: tf.Tensor, encodings_
     """Tail probability (probability of conformance) of the true encodings under the predicted Gaussian distributions
 
     The squared Mahalanobis distance follows a chi-squared distribution with Ne degrees of freedom; the tail
-    probability is its survival function, computed in float64 so that small probabilities are not rounded to 0.
+    probability is its survival function, computed directly (1 - CDF rounds probabilities below ~1e-7 to 0) and
+    in float64. The result is cast back to the dtype of the encodings, so in float32 probabilities below ~1e-45 are still 0.
 
     Args:
         encodings_true (tf.Tensor): true encodings, shape [..., Ne]
