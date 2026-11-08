@@ -1,4 +1,3 @@
-import numpy as np
 import tensorflow as tf
 
 from . import probability
@@ -93,61 +92,6 @@ class MaximumLogLikelihoodLoss:
         losses        = -self.loss_func(encodings_future_true, encodings_future_pred) # [B, Nf]
         batch_loss    = tf.math.reduce_mean(losses, axis=0) # [Nf,]
         weighted_loss = tf.tensordot(batch_loss, self.omega, 1) # []
-
-        return weighted_loss
-
-class ContrastiveNLLRLoss:
-    """Contrastive negative log-likelihood ratio forecast loss (PCPC): the log of the mean likelihood of the negative
-    samples, bounded below by min_log_mean_neg, minus the log-likelihood of the positive sample
-
-    Once the negative samples are less likely than exp(min_log_mean_neg), only the log-likelihood of the positive
-    sample is maximized. This bound sets the scale of the encodings, which the likelihood ratio alone leaves free.
-    """
-
-    def __init__(self, omega: tf.Tensor, warmup: bool, min_log_mean_neg: float=float(np.log(np.finfo(np.float32).tiny))):
-        """
-        Args:
-            omega (tf.Tensor): weights of the losses of the Nf future steps, shape [Nf], e.g. weights.uniform(Nf)
-            warmup (bool): whether to assume unit standard deviations (True, warm-up) or use the predicted ones (False)
-            min_log_mean_neg (float, optional): lower bound on the log of the mean likelihood of the negative samples. Defaults to the log of the smallest normal float32 (-87.3).
-        """
-
-        self.omega            = omega
-        self.warmup           = warmup
-        self.min_log_mean_neg = min_log_mean_neg
-
-        if warmup:
-            self.loss_func = probability.gaussian_log_likelihood_unit_variance
-        else:
-            self.loss_func = probability.gaussian_log_likelihood
-
-    def __call__(self, encodings_future_pos: tf.Tensor, encodings_future_neg: tf.Tensor, encodings_future_pred: tf.Tensor) -> tf.Tensor:
-        """Contrastive loss of the positive future encodings against the negative ones
-
-        Args:
-            encodings_future_pos (tf.Tensor): encodings of the true (positive) future samples, shape [B, Nf, Ne]
-            encodings_future_neg (tf.Tensor): encodings of the negative future samples, shape [B, Nchi, Nf, Ne]
-            encodings_future_pred (tf.Tensor): predicted Gaussian distributions of the future encodings, shape [B, Nf, Ne, 2]
-
-        Returns:
-            tf.Tensor: loss, scalar
-        """
-
-        # Determine log-likelihoods of the negative samples
-        encodings_future_neg = tf.transpose(encodings_future_neg, (1, 0, 2, 3)) # [Nchi, B, Nf, Ne]
-        log_neg              = tf.map_fn(lambda x: self.loss_func(x, encodings_future_pred), encodings_future_neg) # [Nchi, B, Nf]
-
-        # Determine logarithm of the mean likelihood of the negative samples, with log-sum-exp, bounded below
-        Nchi         = tf.cast(tf.shape(log_neg)[0], log_neg.dtype)
-        log_mean_neg = tf.math.reduce_logsumexp(log_neg, axis=0) - tf.math.log(Nchi) # [B, Nf]
-        log_mean_neg = tf.math.maximum(log_mean_neg, self.min_log_mean_neg) # [B, Nf]
-
-        # Determine log-likelihood of the positive samples
-        log_pos = self.loss_func(encodings_future_pos, encodings_future_pred) # [B, Nf]
-
-        # Reduce over batch dimension and take weighted average
-        losses        = tf.math.reduce_mean(log_mean_neg - log_pos, axis=0) # [Nf,]
-        weighted_loss = tf.tensordot(losses, self.omega, 1) # []
 
         return weighted_loss
 

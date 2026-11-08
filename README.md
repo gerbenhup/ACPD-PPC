@@ -8,7 +8,7 @@ loops, losses, probability/anomaly-scoring utilities), split into one module per
 | --- | --- |
 | `PPC.trainers` | `PPC` and `PCPC` trainer classes: train/train_step/test_step |
 | `PPC.anomaly` (`PPC.Anomaly`) | Online anomaly-scoring class |
-| `PPC.losses` | `MeanAbsoluteError`, `MeanSquaredError`, `MaximumLogLikelihoodLoss` (Gaussian or Laplace prior), `LogisticContrastiveLoss` and `ContrastiveNLLRLoss` (PCPC) |
+| `PPC.losses` | `MeanAbsoluteError`, `MeanSquaredError`, `MaximumLogLikelihoodLoss` (Gaussian or Laplace prior), `LogisticContrastiveLoss` (PCPC) |
 | `PPC.probability` | Gaussian (log-)likelihoods, Laplace log-likelihoods, Mahalanobis distance, tail probabilities |
 | `PPC.dimension` | `PCA` wrapper (with Gaussian projection), `TSNE` wrapper |
 | `PPC.wrappers` | `TimeDistributed`, `time_stacked` Keras model wrappers |
@@ -112,11 +112,6 @@ detected. The loss only depends on `d`, so it is invariant to the scale of the e
 collapse), and it is bounded below. As it does not fix the absolute scale of the predicted standard
 deviations, `test.py` calibrates them with one scalar: the maximum likelihood scale on the positive
 validation samples. Models are trained by `PPC.trainers.PCPC` and saved to `models/<hash>/`. As above, run the scripts from within each example's directory.
-
-`PPC.losses.ContrastiveNLLRLoss` is the original PCPC loss: the log of the mean likelihood of the
-negative samples minus the log-likelihood of the positive sample. Without a lower bound on the first
-term this loss is unbounded below, so it bounds it at the log of the smallest float32 (-87.3), which
-the original implementation did implicitly through float32 underflow.
 
 The PCPC examples use the same settings as their PPC counterparts, so the results can be compared
 directly:

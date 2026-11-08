@@ -17,7 +17,7 @@ def find_available(num_gpus: int, max_utilization: int, min_free_memory: int) ->
         min_free_memory (int): minimum free memory (MiB) for a GPU to be considered available
 
     Returns:
-        list[int]: indices of the first `num_gpus` GPU's that satisfy the given constraints, in nvidia-smi order
+        list[int]: indices of the first `num_gpus` GPU's that satisfy the given constraints, in nvidia-smi order, among the GPU's in CUDA_VISIBLE_DEVICES if set
     """
 
     try:
@@ -29,6 +29,14 @@ def find_available(num_gpus: int, max_utilization: int, min_free_memory: int) ->
     stats = stats.decode().splitlines()[1:]
     stats = [x.split(', ') for x in stats]
     stats = [[int(y[0][:-2]), int(y[1][:-4])] for y in stats]
+
+    # Only consider the GPU's visible to TensorFlow, numbered as TensorFlow numbers them
+    visible = os.environ.get('CUDA_VISIBLE_DEVICES')
+    if visible is not None:
+        stats = [stats[int(i)] for i in visible.split(',') if i.strip().isdigit()]
+        if not stats:
+            warnings.warn('No GPU visible (CUDA_VISIBLE_DEVICES), running on the CPU')
+            return []
 
     selected_gpus = []
 
